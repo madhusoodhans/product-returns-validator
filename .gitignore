@@ -1,0 +1,33 @@
+# Python
+.venv/
+.venv-*/
+__pycache__/
+*.pyc
+
+# Node (web/ holds the built UI and IS committed, so the demo runs without Node)
+ui/node_modules/
+
+# Runtime
+logs/
+*.log
+
+# Router state created by deploy/up.sh (vllm-sr writes its runtime config, logs and model cache here)
+deploy/.vllm-sr/
+deploy/models/
+deploy/.state
+
+# Working notes, UI review screenshots and superseded result files (kept locally only)
+PLAN.md
+docs/ui-shots/
+results/archive/
+
+# Secrets and local settings
+.env
+.env.*
+
+# OS and editor junk
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/

@@ -1,0 +1,17 @@
+{
+  "name": "Emily Carter",
+  "email": "emily.c****@example.com",
+  "greeting": "Hi Emily! I can help with a damaged or faulty delivery. Which order is it about, and what is wrong with it? You can attach a photo too.",
+  "orders": [
+    "4411",
+    "5120",
+    "5121",
+    "6230",
+    "6345",
+    "7102",
+    "7103",
+    "8018",
+    "3301",
+    "9311"
+  ]
+}

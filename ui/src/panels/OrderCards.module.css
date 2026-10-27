@@ -1,0 +1,31 @@
+.root { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-2); width: min(100%, 44rem); margin: 2px 0 var(--space-2); }
+.title { display: flex; align-items: baseline; gap: var(--space-2); font-family: var(--font-body); font-size: var(--text-sm); font-weight: 500; letter-spacing: var(--tracking-body); color: var(--foreground); }
+.count { font-weight: 400; color: var(--text-secondary); }
+.grid { list-style: none; margin: 0; padding: 0; width: 100%; display: grid; grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr)); gap: var(--space-2); }
+.grid > li { min-width: 0; display: flex; }
+
+.card {
+  flex: 1; min-width: 0; display: flex; align-items: flex-start; gap: var(--space-3); padding: 9px 12px;
+  border: 1px solid var(--border); border-radius: 14px; background: var(--surface); color: var(--foreground);
+  font: inherit; text-align: left; cursor: pointer;
+  transition: border-color var(--duration-fast) var(--ease-standard), background-color var(--duration-fast) var(--ease-standard), transform var(--duration-instant) var(--ease-standard);
+}
+.card:disabled { opacity: .5; cursor: default; }
+.card:not(:disabled):active { transform: scale(.985); }
+@media (hover: hover) and (pointer: fine) {
+  .card:not(:disabled):hover { border-color: color-mix(in oklab, var(--accent) 45%, var(--border)); background: var(--surface-muted); }
+}
+.icon {
+  flex: none; display: grid; place-items: center; width: 34px; height: 34px; margin-top: 1px; border-radius: 10px;
+  background: var(--accent-subtle); color: var(--accent-strong);
+}
+:root[data-theme="dark"] .icon { color: var(--accent); }
+.text { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.item { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--text-sm); font-weight: 500; }
+.meta { display: flex; flex-wrap: wrap; gap: 0 5px; font-size: var(--text-xs); color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+.hint { font-size: var(--text-xs); color: color-mix(in oklab, var(--warning) 72%, var(--foreground)); }
+
+.more { margin-left: -6px; }
+.chev { transition: transform var(--duration-fast) var(--ease-standard); }
+.chev[data-open] { transform: rotate(180deg); }
+@media (prefers-reduced-motion: reduce) { .chev, .card { transition: none; } }

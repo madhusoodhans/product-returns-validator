@@ -1,0 +1,89 @@
+{
+  "_note": "Mock orders. delivered_days_ago keeps the demo valid on any date; catalog photos are filled in from data/catalog after Phase 0.",
+  "orders": [
+    {
+      "order": "4411",
+      "product": "phone",
+      "item": "Pixel-style smartphone, 128 GB, black",
+      "price": 499,
+      "delivered_days_ago": 2
+    },
+    {
+      "order": "4412",
+      "product": "phone",
+      "item": "Smartphone, 256 GB, blue",
+      "price": 699,
+      "delivered_days_ago": 14
+    },
+    {
+      "order": "5120",
+      "product": "laptop",
+      "item": "14-inch laptop, 16 GB",
+      "price": 849,
+      "delivered_days_ago": 3
+    },
+    {
+      "order": "5121",
+      "product": "laptop",
+      "item": "16-inch pro laptop, 32 GB",
+      "price": 1899,
+      "delivered_days_ago": 1
+    },
+    {
+      "order": "6230",
+      "product": "mug",
+      "item": "Ceramic mug set, 4 x 350 ml, white",
+      "price": 29,
+      "delivered_days_ago": 4
+    },
+    {
+      "order": "6345",
+      "product": "glass",
+      "item": "Crystal wine glasses, set of 4",
+      "price": 45,
+      "delivered_days_ago": 2
+    },
+    {
+      "order": "7102",
+      "product": "sneaker",
+      "item": "Running sneakers, size 9, white",
+      "price": 89,
+      "delivered_days_ago": 5
+    },
+    {
+      "order": "7103",
+      "product": "sneaker",
+      "item": "Canvas sneakers, size 8, black",
+      "price": 59,
+      "delivered_days_ago": 41
+    },
+    {
+      "order": "8018",
+      "product": "headphones",
+      "item": "Wireless over-ear headphones, black",
+      "price": 199,
+      "delivered_days_ago": 3
+    },
+    {
+      "order": "9050",
+      "product": "suitcase",
+      "item": "Hard-shell suitcase, 68 cm, silver",
+      "price": 149,
+      "delivered_days_ago": 6
+    },
+    {
+      "order": "9311",
+      "product": "lamp",
+      "item": "Ceramic table lamp with linen shade",
+      "price": 69,
+      "delivered_days_ago": 2
+    },
+    {
+      "order": "3301",
+      "product": "bottle",
+      "item": "Water bottle, 1 L, pink",
+      "price": 19,
+      "delivered_days_ago": 3
+    }
+  ]
+}

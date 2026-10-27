@@ -1,0 +1,97 @@
+{
+  "phone": {
+    "name": "Smartphone",
+    "window_days": 10,
+    "human_review_over": null,
+    "covered": "A cracked or broken screen, back or body that arrived damaged.",
+    "not_covered": [
+      "Damage after the customer dropped the phone",
+      "Water or liquid damage"
+    ],
+    "photo": "The damaged side of the phone, with the screen switched off."
+  },
+  "laptop": {
+    "name": "Laptop",
+    "window_days": 10,
+    "human_review_over": 1000,
+    "covered": "A cracked screen, a broken hinge or a dented body that arrived damaged.",
+    "not_covered": [
+      "Damage after the customer dropped the laptop",
+      "Liquid spills"
+    ],
+    "photo": "The whole damaged area, with the lid open if the screen or hinge is damaged."
+  },
+  "mug": {
+    "name": "Ceramic mug set (4)",
+    "window_days": 30,
+    "human_review_over": null,
+    "covered": "Mugs that arrived chipped, cracked or broken.",
+    "not_covered": [
+      "Mugs broken or chipped during use or washing"
+    ],
+    "photo": "All mugs of the set in one photo, damage facing the camera."
+  },
+  "glass": {
+    "name": "Wine glasses (4)",
+    "window_days": 30,
+    "human_review_over": null,
+    "covered": "Glasses that arrived broken or cracked.",
+    "not_covered": [
+      "Glasses broken during use or washing"
+    ],
+    "photo": "All glasses and any broken pieces in one photo."
+  },
+  "sneaker": {
+    "name": "Sneakers",
+    "window_days": 30,
+    "human_review_over": null,
+    "covered": "A torn upper or a sole that is detached on arrival.",
+    "not_covered": [
+      "Shoes that have been worn outdoors",
+      "Normal wear and tear"
+    ],
+    "photo": "The damaged shoe, close up."
+  },
+  "headphones": {
+    "name": "Over-ear headphones",
+    "window_days": 15,
+    "human_review_over": null,
+    "covered": "A broken headband or a cracked ear cup on arrival.",
+    "not_covered": [
+      "Damage after use, such as a band snapped while wearing",
+      "Sound or connection problems (handled by the warranty team)"
+    ],
+    "photo": "The broken part, close up."
+  },
+  "suitcase": {
+    "name": "Hard-shell suitcase",
+    "window_days": 30,
+    "human_review_over": null,
+    "covered": "A cracked shell or a broken wheel or handle on arrival.",
+    "not_covered": [
+      "Damage from travel or airline handling"
+    ],
+    "photo": "The damaged side of the suitcase."
+  },
+  "lamp": {
+    "name": "Table lamp",
+    "window_days": 15,
+    "human_review_over": null,
+    "covered": "A broken base or a cracked or torn shade on arrival.",
+    "not_covered": [
+      "Damage caused while the customer assembled the lamp"
+    ],
+    "photo": "The damaged part of the lamp."
+  },
+  "bottle": {
+    "name": "Water bottle (1 L)",
+    "window_days": 30,
+    "human_review_over": null,
+    "covered": "A cracked or broken bottle or lid on arrival.",
+    "not_covered": [
+      "Damage after the customer dropped the bottle",
+      "Dishwasher or hot-water damage"
+    ],
+    "photo": "The whole bottle with the damaged part facing the camera."
+  }
+}

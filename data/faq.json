@@ -1,0 +1,8 @@
+{
+  "_note": "Demo FAQ facts the assistant may quote. Nothing else about refunds or returns may be promised.",
+  "label": "After a return is approved, a free return label is emailed within 10 minutes.",
+  "refund": "The replacement or refund follows once the courier collects the item. Refunds reach the original payment method within 5 to 7 working days.",
+  "replacement": "After approval the customer chooses a replacement or a refund. A replacement depends on stock.",
+  "other_returns": "Returns that are not about damage or a fault (changed mind, wrong size, colour) are started from the Returns page in the customer's account, within the item's return window. This chat only handles damaged or faulty deliveries.",
+  "human": "A colleague reviews the case and replies by email within one working day."
+}

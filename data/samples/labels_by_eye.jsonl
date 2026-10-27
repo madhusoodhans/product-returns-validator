@@ -1,0 +1,42 @@
+{"image": "data/samples/glass/glass_1_glare.jpg", "case": "glare", "damage_visible": 1, "product_recognisable": 1, "note": "shattered rim and shards still clearly visible"}
+{"image": "data/samples/glass/glass_1_cut_off.jpg", "case": "cut_off", "damage_visible": 0, "product_recognisable": 0, "note": "borderline: one jagged edge, mostly background"}
+{"image": "data/samples/headphones/headphones_1_glare.jpg", "case": "glare", "damage_visible": 1, "product_recognisable": 1, "note": "detached ear pads visible; taped band washed out"}
+{"image": "data/samples/headphones/headphones_1_cut_off.jpg", "case": "cut_off", "damage_visible": 0, "product_recognisable": 0, "note": "almost all wall, tiny band corner"}
+{"image": "data/samples/headphones/headphones_2_glare.jpg", "case": "glare", "damage_visible": 1, "product_recognisable": 1, "note": "detached pad visible; exposed driver washed out"}
+{"image": "data/samples/headphones/headphones_2_cut_off.jpg", "case": "cut_off", "damage_visible": 0, "product_recognisable": 0, "note": "only loose pad edge, unclear object"}
+{"image": "data/samples/laptop/laptop_1_glare.jpg", "case": "glare", "damage_visible": 1, "product_recognisable": 1, "note": "dead-pixel blob still visible, greyed"}
+{"image": "data/samples/laptop/laptop_1_cut_off.jpg", "case": "cut_off", "damage_visible": 0, "product_recognisable": 0, "note": "bezel and screen edge, blob cropped out"}
+{"image": "data/samples/laptop/laptop_2_glare.jpg", "case": "glare", "damage_visible": 1, "product_recognisable": 1, "note": "vertical line artifacts still visible right half"}
+{"image": "data/samples/laptop/laptop_2_cut_off.jpg", "case": "cut_off", "damage_visible": 0, "product_recognisable": 0, "note": "screen corner only, artifacts cropped out"}
+{"image": "data/samples/laptop/laptop_3_glare.jpg", "case": "glare", "damage_visible": 1, "product_recognisable": 1, "note": "cracked LCD clearly visible above glare"}
+{"image": "data/samples/laptop/laptop_3_cut_off.jpg", "case": "cut_off", "damage_visible": 0, "product_recognisable": 0, "note": "chair and bezel edge only"}
+{"image": "data/samples/laptop/laptop_4_glare.jpg", "case": "glare", "damage_visible": 1, "product_recognisable": 1, "note": "colour stripes and ink blot still clear"}
+{"image": "data/samples/laptop/laptop_4_cut_off.jpg", "case": "cut_off", "damage_visible": 1, "product_recognisable": 0, "note": "line corruption visible; product not identifiable"}
+{"image": "data/samples/mug/mug_1_glare.jpg", "case": "glare", "damage_visible": 1, "product_recognisable": 1, "note": "rim chip still visible above glare"}
+{"image": "data/samples/mug/mug_1_cut_off.jpg", "case": "cut_off", "damage_visible": 0, "product_recognisable": 0, "note": "rim corner only, chip cropped out"}
+{"image": "data/samples/mug/mug_2_glare.jpg", "case": "glare", "damage_visible": 1, "product_recognisable": 1, "note": "detached handle clearly visible"}
+{"image": "data/samples/mug/mug_2_cut_off.jpg", "case": "cut_off", "damage_visible": 0, "product_recognisable": 0, "note": "intact rim only, handle cropped out"}
+{"image": "data/samples/mug/mug_3_glare.jpg", "case": "glare", "damage_visible": 1, "product_recognisable": 1, "note": "shattered mug visible though washed out"}
+{"image": "data/samples/mug/mug_3_cut_off.jpg", "case": "cut_off", "damage_visible": 0, "product_recognisable": 0, "note": "wall plus thin white sliver"}
+{"image": "data/samples/mug/mug_4_glare.jpg", "case": "glare", "damage_visible": 1, "product_recognisable": 1, "note": "broken wall pieces clearly visible"}
+{"image": "data/samples/mug/mug_4_cut_off.jpg", "case": "cut_off", "damage_visible": 0, "product_recognisable": 1, "note": "borderline: shard tip visible, break unclear"}
+{"image": "data/samples/phone/phone_1_glare.jpg", "case": "glare", "damage_visible": 1, "product_recognisable": 1, "note": "cracks still clearly visible"}
+{"image": "data/samples/phone/phone_1_cut_off.jpg", "case": "cut_off", "damage_visible": 0, "product_recognisable": 0, "note": "blurry corner, no cracks"}
+{"image": "data/samples/phone/phone_2_glare.jpg", "case": "glare", "damage_visible": 1, "product_recognisable": 1, "note": "shattered screen visible around glare"}
+{"image": "data/samples/phone/phone_2_cut_off.jpg", "case": "cut_off", "damage_visible": 0, "product_recognisable": 0, "note": "table and edge sliver only"}
+{"image": "data/samples/phone/phone_3_glare.jpg", "case": "glare", "damage_visible": 1, "product_recognisable": 1, "note": "crack cluster above glare clearly visible"}
+{"image": "data/samples/phone/phone_3_cut_off.jpg", "case": "cut_off", "damage_visible": 1, "product_recognisable": 1, "note": "phone corner with clear cracks"}
+{"image": "data/samples/phone/phone_4_glare.jpg", "case": "glare", "damage_visible": 1, "product_recognisable": 1, "note": "spiderweb cracks visible throughout"}
+{"image": "data/samples/phone/phone_4_cut_off.jpg", "case": "cut_off", "damage_visible": 1, "product_recognisable": 1, "note": "cracked phone corner with status icons"}
+{"image": "data/samples/sneaker/sneaker_1_glare.jpg", "case": "glare", "damage_visible": 1, "product_recognisable": 1, "note": "torn canvas clearly visible"}
+{"image": "data/samples/sneaker/sneaker_1_cut_off.jpg", "case": "cut_off", "damage_visible": 1, "product_recognisable": 1, "note": "frayed toe tear and laces visible"}
+{"image": "data/samples/sneaker/sneaker_2_glare.jpg", "case": "glare", "damage_visible": 1, "product_recognisable": 1, "note": "peeled soles and frayed canvas visible"}
+{"image": "data/samples/sneaker/sneaker_2_cut_off.jpg", "case": "cut_off", "damage_visible": 1, "product_recognisable": 1, "note": "sole separation gap and fraying visible"}
+{"image": "data/samples/sneaker/sneaker_3_glare.jpg", "case": "glare", "damage_visible": 1, "product_recognisable": 1, "note": "torn soles and canvas visible"}
+{"image": "data/samples/sneaker/sneaker_3_cut_off.jpg", "case": "cut_off", "damage_visible": 1, "product_recognisable": 1, "note": "frayed canvas tear on heel visible"}
+{"image": "data/samples/sneaker/sneaker_4_glare.jpg", "case": "glare", "damage_visible": 1, "product_recognisable": 1, "note": "torn soles visible despite glare"}
+{"image": "data/samples/sneaker/sneaker_4_cut_off.jpg", "case": "cut_off", "damage_visible": 1, "product_recognisable": 1, "note": "torn sole layers clearly visible"}
+{"image": "data/samples/suitcase/suitcase_1_glare.jpg", "case": "glare", "damage_visible": 1, "product_recognisable": 0, "note": "shredded wheel tread visible; suitcase not evident"}
+{"image": "data/samples/suitcase/suitcase_1_cut_off.jpg", "case": "cut_off", "damage_visible": 0, "product_recognisable": 0, "note": "borderline: shredded rubber, object unclear"}
+{"image": "data/samples/suitcase/suitcase_2_glare.jpg", "case": "glare", "damage_visible": 0, "product_recognisable": 1, "note": "borderline: tear faint at glare edge"}
+{"image": "data/samples/suitcase/suitcase_2_cut_off.jpg", "case": "cut_off", "damage_visible": 0, "product_recognisable": 0, "note": "handle and logo only, tear cropped out"}

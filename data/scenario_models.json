@@ -1,0 +1,70 @@
+{
+ "v-phone": [
+  "qwen9b",
+  "qwen9b"
+ ],
+ "v-sneaker": [
+  "qwen9b",
+  "qwen9b",
+  "qwen9b"
+ ],
+ "v-mug": [
+  "qwen9b",
+  "qwen9b",
+  "qwen9b"
+ ],
+ "v-glass": [
+  "qwen9b",
+  "qwen9b"
+ ],
+ "i-laptop": [
+  "qwen9b"
+ ],
+ "i-window": [
+  "qwen9b"
+ ],
+ "i-mug": [
+  "qwen9b",
+  "qwen9b",
+  "qwen9b"
+ ],
+ "i-headphones": [
+  "qwen9b"
+ ],
+ "i-hand": [
+  "qwen9b",
+  "qwen9b"
+ ],
+ "i-dark": [
+  "qwen9b",
+  "qwen9b"
+ ],
+ "i-three": [
+  "qwen9b",
+  "qwen9b",
+  "qwen9b",
+  "qwen27b",
+  "qwen9b"
+ ],
+ "m-jailbreak": [
+  null,
+  null
+ ],
+ "m-bottle": [
+  "qwen9b",
+  "qwen9b",
+  "qwen9b"
+ ],
+ "m-offtopic": [
+  null,
+  "qwen9b"
+ ],
+ "m-fake": [
+  null,
+  null
+ ],
+ "m-command": [
+  null,
+  null
+ ]
+}

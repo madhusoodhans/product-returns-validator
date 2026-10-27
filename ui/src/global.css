@@ -1,0 +1,26 @@
+/* Page-level styles. Arc's foundation.css owns the semantic tokens; this file adds the few shared helpers. */
+@import "./components/arc/foundation.css";
+
+/* AMD brand font (Klavika). Arc uses regular and medium weights only. */
+@font-face { font-family: "Klavika"; src: url("./assets/fonts/Klavika-Regular.otf") format("opentype"); font-weight: 400; font-style: normal; font-display: swap; }
+@font-face { font-family: "Klavika"; src: url("./assets/fonts/Klavika-Medium.otf") format("opentype"); font-weight: 500; font-style: normal; font-display: swap; }
+
+:root { --font-display: "Klavika", sans-serif; --font-body: "Klavika", sans-serif; --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; }
+
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { margin: 0; }
+body {
+  background: var(--background); color: var(--foreground);
+  font-family: var(--font-body); font-size: var(--text-base); line-height: var(--leading-body); letter-spacing: var(--tracking-body);
+  -webkit-font-smoothing: antialiased;
+}
+h1, h2, h3, h4 { font-weight: 500; margin: 0; font-family: var(--font-display); letter-spacing: var(--tracking-display); }
+p { margin: 0; }
+.muted { color: var(--text-secondary); }
+.num { font-variant-numeric: tabular-nums; }
+.srOnly { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+
+@media (prefers-reduced-motion: no-preference) {
+  ::view-transition-old(root), ::view-transition-new(root) { animation-duration: var(--duration-standard); }
+}

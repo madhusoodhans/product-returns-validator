@@ -1,0 +1,5 @@
+# Demo server (app/) and bench scripts (bench/)
+requests>=2.31
+pillow>=10.3
+pillow-heif>=0.16      # iPhone photos (HEIC)
+huggingface_hub>=0.34  # the hf CLI used by deploy/download_models.sh

@@ -1,0 +1,67 @@
+.root { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; min-height: 0; height: 100%; min-width: 0; }
+.head { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-3) var(--space-5); border-bottom: 1px solid var(--border-subtle); min-height: 52px; }
+.head h2 { font-size: var(--text-lg); }
+.now { flex: 1; min-width: 0; font-size: var(--text-sm); color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.now strong { font-weight: 500; color: var(--foreground); }
+.scroll { min-height: 0; }
+.empty { display: grid; place-items: center; min-height: 100%; padding: var(--space-8); }
+.list { list-style: none; margin: 0; padding: var(--space-5) clamp(16px, 2vw, 32px) var(--space-6); display: flex; flex-direction: column; gap: var(--space-3); }
+
+.row { display: flex; flex-direction: column; gap: 6px; max-width: min(78%, 40rem); }
+.row[data-role="user"] { align-self: flex-end; align-items: flex-end; }
+.row[data-role="assistant"] { align-self: flex-start; align-items: flex-start; }
+
+.user, .assistant {
+  display: flex; flex-direction: column; gap: var(--space-2); padding: 10px 14px; border-radius: 18px;
+  font: inherit; font-size: var(--text-base); line-height: 1.45; text-align: left;
+}
+.user {
+  border: 1px solid transparent; border-bottom-right-radius: 6px;
+  background: var(--accent); color: var(--accent-foreground); cursor: pointer;
+  transition: box-shadow var(--duration-fast) var(--ease-standard), background-color var(--duration-fast) var(--ease-standard);
+}
+.user[data-pending] { cursor: default; }
+.user[data-photo] { padding: 4px; border-radius: 16px; border-bottom-right-radius: 6px; }
+@media (hover: hover) and (pointer: fine) { button.user:hover { background: var(--accent-strong); } }
+:root[data-theme="dark"] button.user:hover { background: color-mix(in oklab, var(--accent) 85%, var(--background)); }
+.user[data-selected] { box-shadow: 0 0 0 2px var(--background), 0 0 0 4px var(--warning); }
+.assistant { border: 1px solid var(--border); border-bottom-left-radius: 6px; background: var(--surface-muted); color: var(--foreground); min-width: 6rem; }
+.text { white-space: pre-wrap; overflow-wrap: anywhere; }
+.err { color: var(--danger); font-size: var(--text-sm); }
+.meta { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2); margin-left: 2px; }
+.showing { font-size: var(--text-xs); color: var(--text-secondary); }
+.thumb { display: block; width: 220px; max-width: 100%; height: 165px; object-fit: cover; border-radius: 12px; background: var(--surface-muted); }
+.noThumb { display: inline-flex; align-items: center; gap: 6px; padding: 8px 12px; border-radius: 12px; background: color-mix(in oklab, var(--accent-foreground) 18%, transparent); font-size: var(--text-sm); }
+
+.caret { display: inline-block; width: 2px; height: 1.05em; margin-left: 2px; vertical-align: text-bottom; background: currentColor; }
+@media (prefers-reduced-motion: no-preference) {
+  .caret { animation: blink 1s steps(2, start) infinite; }
+}
+@keyframes blink { to { visibility: hidden; } }
+
+.compose { padding: 0 var(--space-3) var(--space-2); border-top: 1px solid var(--border-subtle); }
+.composeRow { display: flex; align-items: flex-end; }
+.composer { flex: 1; min-width: 0; border-top: 0; padding-left: 4px; }
+.fileError { margin: var(--space-2) var(--space-3) 0; color: var(--danger); font-size: var(--text-sm); }
+.gallery {
+  display: grid; width: 40px; height: 40px; flex: none; place-items: center; margin: 0 0 13px 0; padding: 0;
+  border: 0; border-radius: var(--radius-pill); background: transparent; color: var(--text-secondary); cursor: pointer;
+  transition: background-color var(--duration-fast) var(--ease-standard), color var(--duration-fast) var(--ease-standard), transform var(--duration-instant) var(--ease-standard);
+}
+.gallery:disabled { opacity: .45; cursor: default; }
+.gallery:not(:disabled):active { transform: scale(.94); }
+@media (hover: hover) and (pointer: fine) { .gallery:not(:disabled):hover { background: var(--surface-muted); color: var(--foreground); } }
+.cardsRow { display: flex; align-self: stretch; }
+
+/* A turn sent by a button (the review request): small, quiet, not an accent bubble. */
+.user[data-system] { padding: 6px 12px; border: 1px dashed var(--border-strong); background: transparent; color: var(--text-secondary); font-size: var(--text-sm); }
+@media (hover: hover) and (pointer: fine) { button.user[data-system]:hover { background: var(--surface-muted); } }
+:root[data-theme="dark"] button.user[data-system]:hover { background: var(--surface-muted); }
+
+/* Where the chat ended: a quiet divider, then the end banner in the thread itself (the composer is gone), so the banner
+ * sits right under the last reply and a scrolled thread still shows where the chat ended. */
+.endRow { display: flex; flex-direction: column; gap: var(--space-3); align-self: stretch; margin-top: var(--space-2); }
+.endDivider { display: flex; align-items: center; gap: var(--space-3); font-size: var(--text-xs); color: var(--text-secondary); }
+.endDivider::before, .endDivider::after { content: ""; flex: 1; height: 1px; background: var(--border-subtle); }
+.endWrap { min-width: 0; }
+.endBanner p { font-size: var(--text-sm); }

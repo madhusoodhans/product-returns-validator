@@ -1,0 +1,125 @@
+# vllm-sr Router config for the product returns validator demo (vllm-sr 0.5.0.dev20261015074033).
+#
+# - d3-mini (Decision 3.0) runs in the Router's model runtime on the GPU and answers on /v1/systemone: order matching,
+#   scope check, eligibility, photo check and reply check.
+# - Vela 2.0 0.8B (vela08) is the Router's decision model: it scores prompt attacks and personal data and picks
+#   qwen9b or qwen27b for each turn of the `returns/auto` entry point. The demo reads these through the Router's
+#   routing preview (management API on 127.0.0.1:8080, published by vllm-sr).
+# - qwen9b and qwen27b are the two vLLM containers started by deploy/serve_qwen.sh; the Router reaches them by
+#   container name on the vllm-sr-network Docker network. The demo also calls them by these names directly.
+# - The listener binds 127.0.0.1 only. Open the demo page from a laptop through an SSH tunnel (see README.md).
+version: v0.3
+
+listeners:
+  - name: http-8899
+    address: 127.0.0.1
+    port: 8899
+    timeout: 600s
+    systemone:
+      models: [vllm-sr/d3-mini]
+
+global:
+  model_catalog:
+    deployments:
+      vela08:
+        provider: model_runtime
+        artifact: vllm-sr/Vela-2.0-0.8B
+        device: rocm
+      d3mini:
+        provider: model_runtime
+        artifact: vllm-sr/d3-mini
+        device: rocm
+    system:
+      decision_model:
+        deployment: vela08
+
+entrypoints:
+  - model_names: [returns/auto]
+    recipe: returns
+
+providers:
+  defaults:
+    model: qwen9b
+  models:
+    - name: qwen9b
+      provider_model_id: qwen9b
+      backend_refs:
+        - {name: primary, provider: vllm, endpoint: "prv-qwen9b:8000", protocol: http}
+    - name: qwen27b
+      provider_model_id: qwen27b
+      backend_refs:
+        - {name: primary, provider: vllm, endpoint: "prv-qwen27b:8000", protocol: http}
+
+# Default recipe (any other model name): a plain pass-through to the 9B. The demo only uses returns/auto and the
+# concrete model names.
+routing:
+  decisions:
+    - name: default
+      priority: 100
+      rules: {operator: AND, conditions: []}
+      modelRefs:
+        - model: qwen9b
+
+recipes:
+  - name: returns
+    description: Returns chat demo. Prompt attacks are blocked, PII is flagged, Vela picks the 9B or the 27B.
+    routing:
+      model_bindings:              # pin both guardrails to the already-loaded Vela 2.0 0.8B (vela08)
+        prompt_guard: {deployment: vela08, contract: label_distribution.v1}
+        pii_classifier: {deployment: vela08, contract: token_spans.v1}
+      signals:
+        jailbreak:
+          - name: prompt_attack
+            threshold: 0.75            # mom-v1 Vault default
+            include_history: true
+        pii:
+          - name: customer_pii         # no threshold: Vela 2.0 uses its calibrated per-length threshold
+            include_history: false     # flag only what this turn adds
+      decisions:
+        # Block: a detected prompt attack never reaches a backend (fixed reply, no model call).
+        - name: returns-guard
+          description: Contain detected prompt attacks before calling a backend.
+          priority: 300
+          rules:
+            operator: AND
+            conditions:
+              - {type: jailbreak, name: prompt_attack}
+            on_unknown: no_match       # guard failure lets the turn through; use fail_request to fail closed
+          plugins:
+            - type: fast_response
+              configuration:
+                message: Sorry, I can't help with that request. I can help with returns, refunds and exchanges.
+        # Flag only: PII still routes normally; the decision name (x-vsr-selected-decision) carries the flag.
+        - name: returns-pii
+          description: The turn contains personal data; route as usual.
+          priority: 200
+          rules:
+            operator: AND
+            conditions:
+              - {type: pii, name: customer_pii}
+          modelRefs:
+            - model: qwen27b
+            - model: qwen9b
+          algorithm:
+            type: decision
+            decision:
+              instructions: Which model should answer this customer-service turn about a return?
+              candidates:
+                qwen9b: Medium model for normal customer-service turns, such as return status, eligibility questions, return labels, refund timing and simple follow-ups
+                qwen27b: Large model for disputes, several issues in one turn, an angry or upset customer, or a customer arguing about the returns policy
+              timeout_ms: 1000
+        - name: returns-tiered
+          description: Ordinary returns turn.
+          priority: 100
+          rules: {operator: AND, conditions: []}
+          modelRefs:
+            - model: qwen27b
+            - model: qwen9b
+          algorithm:
+            type: decision
+            decision:
+              instructions: Which model should answer this customer-service turn about a return?
+              candidates:
+                qwen9b: Medium model for normal customer-service turns, such as return status, eligibility questions, return labels, refund timing and simple follow-ups
+                qwen27b: Large model for disputes, several issues in one turn, an angry or upset customer, or a customer arguing about the returns policy
+              timeout_ms: 1000

@@ -1,0 +1,15 @@
+/* Wider than Arc's default dialog: the gallery needs room for a grid of photos. */
+.dialog { width: min(calc(100vw - var(--space-8)), 1040px) !important; }
+.groups { display: flex; flex-direction: column; gap: var(--space-5); }
+.h3 { font-size: var(--text-base); margin-bottom: var(--space-2); }
+.grid { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: var(--space-2); }
+.tile {
+  display: flex; flex-direction: column; gap: 4px; width: 100%; padding: 4px; border: 1px solid var(--border); border-radius: 14px;
+  background: var(--surface); color: var(--text-secondary); font: inherit; font-size: var(--text-xs); text-align: left; cursor: pointer;
+  transition: border-color var(--duration-fast) var(--ease-standard), color var(--duration-fast) var(--ease-standard);
+}
+.tile img { display: block; width: 100%; aspect-ratio: 4 / 3; object-fit: cover; border-radius: 10px; background: var(--surface-muted); }
+.tile span { padding: 0 4px 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+@media (hover: hover) and (pointer: fine) { .tile:hover { border-color: var(--border-strong); color: var(--foreground); } }
+.muted { color: var(--text-secondary); }
+.error { color: var(--danger); }
