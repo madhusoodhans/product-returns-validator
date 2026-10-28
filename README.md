@@ -31,7 +31,92 @@ happens:
 The page compares the routed flow with handing every turn to Qwen 27B alone: model time, LLM tokens and dollars per
 million chats like this one, per chat.
 
-![A valid return: a blurry photo is refused with a tip, the second photo is approved](docs/screenshots/approved.png)
+![A valid return: a blurry photo is refused with a tip, the second photo is approved](docs/demo.gif)
+
+
+## Requirements
+
+- One AMD Instinct GPU with ROCm and `rocm-smi` working. Measured on an MI300X (192 GB). GPU memory: Qwen 27B takes
+  62% of the GPU and Qwen 9B 13% (vLLM `--gpu-memory-utilization`, a share of the whole GPU, mostly KV cache), plus
+  room for d3-mini and Vela 2.0 in the Router; `deploy/up.sh` asks for ~172 GiB free on a 192 GB GPU. On a smaller
+  GPU lower `GPU_UTIL_27B` (the weights alone are ~52 GB).
+- Docker, able to pass `/dev/kfd` and `/dev/dri` to containers. If Docker needs sudo on your host, set
+  `DOCKER="sudo docker"` for the deploy scripts.
+- Disk: ~82 GB for the models (Qwen 27B ~52 GB, Qwen 9B ~19 GB, d3-mini ~8.5 GB, Vela 2.0 0.8B ~2 GB) plus the Docker
+  images (`vllm/vllm-openai-rocm:v0.29.0` and the vllm-sr ROCm Router image, pulled on first start).
+- Python 3.12 or newer (tested with 3.14). The vllm-sr CLI goes in its own venv; it was used with Python 3.12.
+- Hugging Face access to download the models. They are not gated today; if one becomes gated, accept its terms on the
+  hub and `export HF_TOKEN=...` first.
+- Node 18+ only if you change the UI (`ui/`); the built page is committed in `web/`.
+
+## Setup
+
+```bash
+# 1. Get the code
+git clone https://github.com/madhusoodhans/product-returns-validator.git
+cd product-returns-validator
+
+# 2. Python environment for the demo server, the bench scripts and the hf CLI
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+
+# 3. The vllm-sr CLI (starts the Router in Docker), pinned to the build the demo was made with
+python3 -m venv .venv-sr
+.venv-sr/bin/pip install --pre vllm-sr==0.5.0.dev20261015074033
+
+# 4. Models: Qwen 27B and 9B into the Hugging Face cache, d3-mini and Vela 2.0 into deploy/models (~82 GB, resumable)
+deploy/download_models.sh
+
+# 5. Start everything: the two Qwen containers, the Router, then the demo server (~5-15 min; the first Router start
+#    compiles GPU kernels and can take up to ~30 min)
+deploy/up.sh                     # DOCKER="sudo docker" deploy/up.sh where Docker needs sudo
+
+# 6. Measure this server's Qwen 27B baseline and 27B markers for the page (~2 min; once per server)
+deploy/measure.sh
+
+# 7. Check it end to end: health, then three sample conversations through the HTTP API
+deploy/smoke_test.sh             # --all runs all 16
+```
+
+`deploy/down.sh` stops what `deploy/up.sh` started (it records that in `deploy/.state`) and leaves anything that was
+already running alone; `deploy/down.sh --all` stops the demo's containers and the Router regardless. `deploy/up.sh`
+can be run again at any time: parts that are already healthy are kept.
+
+What `deploy/` contains:
+
+| File | What it does |
+|---|---|
+| `router.yaml` | vllm-sr config: d3-mini on `/v1/systemone`; Vela 2.0 as the decision model; the `returns/auto` entry point with the jailbreak guard, the PII flag and the 9B/27B choice; `qwen9b` and `qwen27b` as vLLM backends reached by container name on the `vllm-sr-network` Docker network; listener on 127.0.0.1:8899. |
+| `serve_qwen.sh <qwen27b\|qwen9b>` | One vLLM ROCm container (`vllm/vllm-openai-rocm:v0.29.0`), thinking off, 32k context, port 127.0.0.1:8102 / 8103. The 27B has image input on (for the baseline on the sample photos); the 9B is text only. Env: `GPU_UTIL`, `GPU`, `HF_HOME`, `DOCKER`, `AITER`, `CPUSET`. |
+| `download_models.sh` | `hf download` of the four models. |
+| `up.sh` / `down.sh` | Checks (rocm-smi, Docker, free GPU memory before each part, ports, models), start one model at a time, wait for health (with the likely cause when a container stops while loading), start the demo server. |
+| `measure.sh` | `bench/baseline_27b.py` (Qwen 27B alone on every sample turn) and `bench/run_scenarios.py` (the routed flow on every sample turn, for the 27B markers), then restarts the demo server. |
+| `smoke_test.sh` | `/health` must be ok, then sample conversations through `POST /api/chat`, every turn's verdict checked against `data/scenarios.json`. Non-zero exit on any failure. |
+
+The Router is started from `deploy/` with
+`vllm-sr serve --config router.yaml --platform rocm --minimal --replace-active-config`; vllm-sr keeps its state in
+`deploy/.vllm-sr/` and its model cache in `deploy/models/` (both gitignored). vllm-sr runs one Router stack per host
+(container `vllm-sr-router-container`); if your host already runs one for something else, `up.sh` stops with a message
+instead of replacing it. In that case add the two deployments, the two models, the `returns/auto` entry point and the
+`returns` recipe from `deploy/router.yaml` to the existing config.
+
+**What was tested where.** The demo was built and measured on a host whose Router also serves other demos, so
+`deploy/router.yaml` was validated offline (`vllm-sr config validate --offline`) and its `returns` recipe is the one
+the live Router runs; `up.sh` (with everything already running), `down.sh`, `measure.sh` and `smoke_test.sh` were run
+on that host. The steps that start the Qwen containers and a new Router stack follow the scripts of a sister demo that
+were run on a fresh server, but these exact ones have not been run on a fresh server yet. If one fails, its message
+names the part and the likely cause.
+
+## Open it from a laptop
+
+The demo server, the Router and the vLLM servers all listen on 127.0.0.1 only. Use an SSH tunnel:
+
+```bash
+ssh -L 8602:localhost:8602 user@your-gpu-server
+```
+
+then open <http://localhost:8602> in the laptop's browser. The page uses no external resources, so it also works on a
+network without internet access.
 
 ## What vllm-sr, Vela and D3 do here
 
@@ -127,95 +212,6 @@ badge marks conversations where Vela routes a turn to Qwen 27B (Vela decides liv
 | | Off-topic question | off-topic (fixed reply) → need photo |
 | | Fake approval tricks | blocked → blocked |
 | | Commands in the chat | blocked → blocked |
-
-| | |
-|---|---|
-| ![Commands are blocked by the guardrail, the chat closes](docs/screenshots/blocked-commands.png) | ![Qwen 27B answers the angry customer, then the case goes to a person](docs/screenshots/qwen27b-and-handover.png) |
-| ![Not covered: the policy popover highlights the line the reply rests on](docs/screenshots/not-covered-policy.png) | ![Off-topic question, dark theme](docs/screenshots/off-topic-dark.png) |
-
-## Requirements
-
-- One AMD Instinct GPU with ROCm and `rocm-smi` working. Measured on an MI300X (192 GB). GPU memory: Qwen 27B takes
-  62% of the GPU and Qwen 9B 13% (vLLM `--gpu-memory-utilization`, a share of the whole GPU, mostly KV cache), plus
-  room for d3-mini and Vela 2.0 in the Router; `deploy/up.sh` asks for ~172 GiB free on a 192 GB GPU. On a smaller
-  GPU lower `GPU_UTIL_27B` (the weights alone are ~52 GB).
-- Docker, able to pass `/dev/kfd` and `/dev/dri` to containers. If Docker needs sudo on your host, set
-  `DOCKER="sudo docker"` for the deploy scripts.
-- Disk: ~82 GB for the models (Qwen 27B ~52 GB, Qwen 9B ~19 GB, d3-mini ~8.5 GB, Vela 2.0 0.8B ~2 GB) plus the Docker
-  images (`vllm/vllm-openai-rocm:v0.29.0` and the vllm-sr ROCm Router image, pulled on first start).
-- Python 3.12 or newer (tested with 3.14). The vllm-sr CLI goes in its own venv; it was used with Python 3.12.
-- Hugging Face access to download the models. They are not gated today; if one becomes gated, accept its terms on the
-  hub and `export HF_TOKEN=...` first.
-- Node 18+ only if you change the UI (`ui/`); the built page is committed in `web/`.
-
-## Setup
-
-```bash
-# 1. Get the code
-git clone https://github.com/madhusoodhans/product-returns-validator.git
-cd product-returns-validator
-
-# 2. Python environment for the demo server, the bench scripts and the hf CLI
-python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
-
-# 3. The vllm-sr CLI (starts the Router in Docker), pinned to the build the demo was made with
-python3 -m venv .venv-sr
-.venv-sr/bin/pip install --pre vllm-sr==0.5.0.dev20261015074033
-
-# 4. Models: Qwen 27B and 9B into the Hugging Face cache, d3-mini and Vela 2.0 into deploy/models (~82 GB, resumable)
-deploy/download_models.sh
-
-# 5. Start everything: the two Qwen containers, the Router, then the demo server (~5-15 min; the first Router start
-#    compiles GPU kernels and can take up to ~30 min)
-deploy/up.sh                     # DOCKER="sudo docker" deploy/up.sh where Docker needs sudo
-
-# 6. Measure this server's Qwen 27B baseline and 27B markers for the page (~2 min; once per server)
-deploy/measure.sh
-
-# 7. Check it end to end: health, then three sample conversations through the HTTP API
-deploy/smoke_test.sh             # --all runs all 16
-```
-
-`deploy/down.sh` stops what `deploy/up.sh` started (it records that in `deploy/.state`) and leaves anything that was
-already running alone; `deploy/down.sh --all` stops the demo's containers and the Router regardless. `deploy/up.sh`
-can be run again at any time: parts that are already healthy are kept.
-
-What `deploy/` contains:
-
-| File | What it does |
-|---|---|
-| `router.yaml` | vllm-sr config: d3-mini on `/v1/systemone`; Vela 2.0 as the decision model; the `returns/auto` entry point with the jailbreak guard, the PII flag and the 9B/27B choice; `qwen9b` and `qwen27b` as vLLM backends reached by container name on the `vllm-sr-network` Docker network; listener on 127.0.0.1:8899. |
-| `serve_qwen.sh <qwen27b\|qwen9b>` | One vLLM ROCm container (`vllm/vllm-openai-rocm:v0.29.0`), thinking off, 32k context, port 127.0.0.1:8102 / 8103. The 27B has image input on (for the baseline on the sample photos); the 9B is text only. Env: `GPU_UTIL`, `GPU`, `HF_HOME`, `DOCKER`, `AITER`, `CPUSET`. |
-| `download_models.sh` | `hf download` of the four models. |
-| `up.sh` / `down.sh` | Checks (rocm-smi, Docker, free GPU memory before each part, ports, models), start one model at a time, wait for health (with the likely cause when a container stops while loading), start the demo server. |
-| `measure.sh` | `bench/baseline_27b.py` (Qwen 27B alone on every sample turn) and `bench/run_scenarios.py` (the routed flow on every sample turn, for the 27B markers), then restarts the demo server. |
-| `smoke_test.sh` | `/health` must be ok, then sample conversations through `POST /api/chat`, every turn's verdict checked against `data/scenarios.json`. Non-zero exit on any failure. |
-
-The Router is started from `deploy/` with
-`vllm-sr serve --config router.yaml --platform rocm --minimal --replace-active-config`; vllm-sr keeps its state in
-`deploy/.vllm-sr/` and its model cache in `deploy/models/` (both gitignored). vllm-sr runs one Router stack per host
-(container `vllm-sr-router-container`); if your host already runs one for something else, `up.sh` stops with a message
-instead of replacing it. In that case add the two deployments, the two models, the `returns/auto` entry point and the
-`returns` recipe from `deploy/router.yaml` to the existing config.
-
-**What was tested where.** The demo was built and measured on a host whose Router also serves other demos, so
-`deploy/router.yaml` was validated offline (`vllm-sr config validate --offline`) and its `returns` recipe is the one
-the live Router runs; `up.sh` (with everything already running), `down.sh`, `measure.sh` and `smoke_test.sh` were run
-on that host. The steps that start the Qwen containers and a new Router stack follow the scripts of a sister demo that
-were run on a fresh server, but these exact ones have not been run on a fresh server yet. If one fails, its message
-names the part and the likely cause.
-
-## Open it from a laptop
-
-The demo server, the Router and the vLLM servers all listen on 127.0.0.1 only. Use an SSH tunnel:
-
-```bash
-ssh -L 8602:localhost:8602 user@your-gpu-server
-```
-
-then open <http://localhost:8602> in the laptop's browser. The page uses no external resources, so it also works on a
-network without internet access.
 
 ## Presenting the demo
 
@@ -330,7 +326,7 @@ app/                 demo server and claim flow
   models.py          D3 and Qwen calls through the Router; upload decoding
 web/                 built UI (committed), served at /
 ui/                  UI source (React 19, Arc components, Vite); `npm run build` writes web/; mock-server.mjs
-docs/                API.md (HTTP and SSE contract), UI.md (page), screenshots/
+docs/                API.md (HTTP and SSE contract), UI.md (page), demo.gif
 data/                customer, orders, policies, FAQ, sample conversations, 27B baseline
 data/samples/        photos used by the samples and the 📁 gallery (generated from data/raw, see Credits)
 data/raw/            source photos: Wikimedia Commons (commons/, SOURCES.md) and photos taken for the demo (user/)
