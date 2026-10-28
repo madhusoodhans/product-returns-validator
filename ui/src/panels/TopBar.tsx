@@ -1,11 +1,10 @@
-/* AMD logo and title, the stats of the current chat session (`stats` events / GET /api/stats?session=), the theme switch.
+/* Title, the stats of the current chat session (`stats` events / GET /api/stats?session=), the theme switch.
  * One row of stat blocks spread over the bar in two groups: "This chat" counts and "Routed vs all on Qwen 27B".
  * Missing values render as a dash; a new chat starts from an empty bar. */
 import type { ReactNode } from "react";
 import { ThemeSwitch, type Theme } from "../components/arc/theme-switch/theme-switch";
 import type { Stats } from "../api";
 import { DASH, fmtCompact, fmtInt, fmtPct } from "../format";
-import amdLogo from "../assets/amd-logo.png";
 import styles from "./TopBar.module.css";
 
 type Pair = { routed: number | null; baseline_27b: number | null } | undefined;
@@ -48,8 +47,6 @@ export function TopBar({ stats, theme, onTheme }: { stats: Stats | null; theme: 
   return (
     <header className={styles.bar}>
       <div className={styles.brand}>
-        <img className={styles.logo} src={amdLogo} alt="AMD" />
-        <span className={styles.rule} aria-hidden="true" />
         <h1 title="D3 decides, Qwen chats">Returns validator Demo</h1>
       </div>
 

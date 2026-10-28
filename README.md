@@ -391,8 +391,8 @@ page).
   blurred, darkened, glare added, cropped, a sticky note added) are adaptations under the same licences.
 - **Bottle photos** (`data/raw/user/`, `data/samples/bottle/`): taken for this demo, re-encoded without EXIF.
 - **Chart** (`data/test/chart.png`): a generated bar chart with example data, used to test that non-photos are refused.
-- **AMD logo and Klavika font** (`ui/src/assets/`, built into `web/`): AMD brand assets, used for this AMD demo. They
-  are not covered by any licence of this repo.
+- **Klavika font** (`ui/src/assets/fonts/`, built into `web/`): an AMD brand asset, used for this AMD demo. It is
+  not covered by any licence of this repo.
 - **Models**: [vllm-sr/d3-mini](https://huggingface.co/vllm-sr/d3-mini),
   [vllm-sr/Vela-2.0-0.8B](https://huggingface.co/vllm-sr/Vela-2.0-0.8B),
   [Qwen/Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B) and [Qwen/Qwen3.5-9B](https://huggingface.co/Qwen/Qwen3.5-9B)

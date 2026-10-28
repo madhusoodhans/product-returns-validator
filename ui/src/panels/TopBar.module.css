@@ -24,9 +24,6 @@
 :root[data-theme="dark"] .bar { --tb-bg: oklch(27% .03 262); --surface: oklch(31% .03 262); --surface-muted: oklch(36% .03 262); border-bottom: 1px solid oklch(34% .03 262); }
 
 .brand { display: flex; align-items: center; gap: var(--space-3); min-width: 0; }
-/* The supplied logo is black on transparent; the bar is dark in both themes, so it is shown white. */
-.logo { display: block; height: 22px; width: auto; flex: none; filter: brightness(0) invert(1); }
-.rule { width: 1px; height: 24px; background: var(--border-strong); flex: none; }
 .brand h1 { font-size: var(--text-xl); line-height: 1.15; max-width: 11em; text-wrap: balance; }  /* wraps to two lines when the bar is narrow */
 
 /* Caption row, then one row of stat blocks. space-between gives every column the same gap, so the blocks spread over the
@@ -68,15 +65,12 @@
   .item dt, .caption { font-size: var(--text-sm); }
   .item dd { font-size: var(--text-xl); }
   .item[data-wide] { min-width: 13rem; }
-  .logo { height: 26px; }
-  .rule { height: 28px; }
 }
 /* Condense instead of wrapping: smaller values and gaps on laptop widths. */
 @media (max-width: 1500px) {
   .stats { column-gap: var(--space-3); }
   .item dd { font-size: var(--text-base); }
   .brand h1 { font-size: var(--text-lg); }
-  .logo { height: 20px; }
   .item[data-wide] { min-width: 9rem; }
 }
 @media (max-width: 1340px) {
