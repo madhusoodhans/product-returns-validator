@@ -10,6 +10,7 @@ eligible claim still counts. A photo is checked whenever it arrives: before the 
 before the claim is clear its result is kept, and it decides the claim once the claim is eligible.
 """
 import re
+import time
 
 import claim
 import eligibility
@@ -69,6 +70,7 @@ class Session:
         self.claims = {}         # order id -> Claim
         self.claim = None        # the claim this chat is on
         self.pending_image = None  # a photo sent before any order was known (data URL), checked once one is
+        self.pending_at = 0.0      # when it came (the server drops it after a while)
         self.queued = []         # other order ids named in one message, handled after the current claim
         self.turns = 0
         self.ended = None          # set when the chat is over (see END): no further turns except a review request
@@ -471,7 +473,7 @@ class Session:
 
         if not c:
             if img:
-                self.pending_image = img
+                self.pending_image, self.pending_at = img, time.time()
                 ctx["photo_note"] = "Say their photo is kept and will be checked once we know the order; do not describe it."
             yield from skip_rest("claim", "Waiting for the order")
             return "need_order"

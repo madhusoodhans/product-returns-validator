@@ -264,10 +264,21 @@ Environment variables of the demo server (`app/server.py`, also honoured by `sta
 | `ROUTER_ADMIN_URL` | `http://localhost:8080` | The Router's management API, for the routing preview of `returns/auto` (Vela's guardrail scores and model choice). |
 | `HOST` | `127.0.0.1` | Address the demo server listens on. Keep it on loopback and use an SSH tunnel. |
 | `PORT` | `8602` | Port of the demo server. |
+| `PLAY_ALL` | `1` | `0` hides the Play all button (the hosted Space sets it). |
+| `MODEL_SLOTS` / `MODEL_WAIT_S` | 12 / 15 | Model calls at once per API (D3, chat, routing preview), and the longest wait for one before the turn answers "busy". |
 | `GPU_USD_PER_HOUR` | 2.59 | Price of one GPU hour for the dollar figures. The default is DigitalOcean's on-demand MI300X GPU Droplet price per GPU (checked 2026-10-26). Set your own cloud's price. |
 
 `GET /health` probes each part the way the flow calls it: the Router, the routing preview for `returns/auto` (it fails
-with a clear message if the recipe is missing), D3 and both Qwen models.
+with a clear message if the recipe is missing), D3 and both Qwen models (cached 60 s). `GET /healthz` is a liveness
+check without model calls; `GET /api/metrics` shows chats, turns in the last hour, queued model calls and 429s.
+
+**Many visitors.** Chats are kept in memory for 30 minutes after their last message (at most 300; a photo waiting for
+an order 10 minutes); a chat the server no longer knows tells the page to start a new one. Each chat may send 10
+messages a minute, each visitor IP 30 messages and 5 new chats a minute (not on loopback, so Play all and the smoke
+test are not limited); 429/503 from a model API are retried once, and when the models are out of capacity the turn
+answers "The service is busy, please try again." Details in [docs/API.md](docs/API.md) ("Many visitors").
+`Dockerfile` packages the server and the built page for a Hugging Face Space (port 7860, Play all off; draft Space
+card in `deploy/space/README.md`).
 
 Deploy script variables: `DOCKER` (default `docker`), `VLLM_SR` (default `.venv-sr/bin/vllm-sr`), `GPU` (GPU index,
 default 0), `HF_HOME` (default `$HOME/.cache/huggingface`), `GPU_UTIL_27B` / `GPU_UTIL_9B` (default 0.62 / 0.13),
@@ -301,10 +312,16 @@ policy per product (`data/policies.json`), the facts the bot may quote (`data/fa
 With the models up (results of our last runs are in `results/`):
 
 ```bash
+.venv/bin/python tests/test_multiuser.py     # no models: chat eviction and expiry, rate limits, slots, 429 retry
 .venv/bin/python bench/run_scenarios.py      # the 16 sample conversations, every turn's verdict (36 turns)
 .venv/bin/python bench/run_regressions.py    # 30 conversations, one per bug found while building and reviewing
 .venv/bin/python bench/probe_scope.py        # 15 injections, 10 off-topic and 8 normal messages through the flow
 ```
+
+Load test without models: `bench/stub_models.py` is a fake Router (D3, chat completions incl. streaming and
+json_schema, routing preview; switches to inject 429s or slow answers); start it, start a demo server with
+`ROUTER_URL=http://127.0.0.1:8932 ROUTER_ADMIN_URL=http://127.0.0.1:8932 PORT=8632`, then run
+`bench/load_test.py` (50 visitors, 2,000 chats, injected 429s, slow models). Never point it at the real models.
 
 `run_regressions.py` holds one conversation per problem found by hand, by a code review and by two rounds of
 exploratory testing: a changed story after an eligible claim, orders of another customer, switching orders, a photo
@@ -316,7 +333,8 @@ little randomness, so a check on a reply's wording can occasionally miss; run it
 
 ```
 app/                 demo server and claim flow
-  server.py          HTTP server: page, SSE stream, per-chat stats, /health
+  server.py          HTTP server: page, SSE stream, per-chat stats, chat lifetime and limits, /health, /api/metrics
+  limits.py          model-call slots per API, 429/503 retry, per-chat and per-IP rate limits
   flow.py            the conversation: one claim per order, every step as an event, chat endings
   turn_checks.py     Vela routing preview (guardrail, 9B/27B), D3 scope check, D3 reply check
   claim.py           Qwen 9B claim extraction, D3 order matching, policy rules

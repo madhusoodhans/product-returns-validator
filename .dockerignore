@@ -1,0 +1,19 @@
+# Only app/, data/ (minus tuning and source files), web/ and requirements.txt go into the image
+.git
+.venv
+.venv-*
+**/__pycache__
+*.pyc
+logs/
+ui/
+bench/
+tests/
+results/
+docs/
+deploy/
+data/raw/
+data/complaints/
+data/test/
+*.md
+.env
+.env.*

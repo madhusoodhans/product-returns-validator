@@ -5,7 +5,7 @@ __pycache__/
 *.pyc
 
 # Node (web/ holds the built UI and IS committed, so the demo runs without Node)
-ui/node_modules/
+ui/node_modules
 
 # Runtime
 logs/

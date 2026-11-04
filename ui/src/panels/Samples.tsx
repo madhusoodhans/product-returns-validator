@@ -27,10 +27,12 @@ function diffText(sc: Scenario, got: Outcomes[string]) {
   }).join("\n");
 }
 
-export function Samples({ groups, error, playing, outcomes, used27, onPlay, onPlayAll, onStop }: {
+export function Samples({ groups, error, playing, outcomes, used27, playAll, onPlay, onPlayAll, onStop }: {
   groups: Group[]; error: string | null; playing: Playing | null; outcomes: Outcomes;
   /** What the last run of each scenario did; before a run the badge follows `uses_27b` from the bench. */
   used27: Used27;
+  /** Show Play all (off on the hosted copy: GET /api/config). */
+  playAll: boolean;
   onPlay: (group: string, sc: Scenario) => void; onPlayAll: () => void; onStop: () => void;
 }) {
   const reduce = useReducedMotion();
@@ -102,7 +104,7 @@ export function Samples({ groups, error, playing, outcomes, used27, onPlay, onPl
       <div className={styles.foot}>
         {playing?.all
           ? <Button variant="secondary" onClick={onStop}><Square size={14} strokeWidth={2} aria-hidden="true" /> Stop</Button>
-          : <Button onClick={onPlayAll} disabled={!total}><Play size={14} strokeWidth={2} aria-hidden="true" /> Play all</Button>}
+          : playAll && <Button onClick={onPlayAll} disabled={!total}><Play size={14} strokeWidth={2} aria-hidden="true" /> Play all</Button>}
         {playing && !playing.all && <Button variant="ghost" onClick={onStop}>Stop</Button>}
       </div>
     </nav>

@@ -42,13 +42,13 @@ if "--all" not in args:
     scenarios = [sc for sc in scenarios if sc["id"] in ("v-phone", "i-window", "m-jailbreak")]
 
 for sc in scenarios:
-    session = f"smoke-{uuid.uuid4().hex[:8]}"
+    session = str(uuid.uuid4())
     got, ended, err = [], None, None
-    for t in sc["turns"]:
+    for i, t in enumerate(sc["turns"]):
         verdict = None
         try:
-            with requests.post(f"{base}/api/chat", json={"session": session, "text": t.get("text"), "image": t.get("image")},
-                               stream=True, timeout=(5, 180)) as r:
+            with requests.post(f"{base}/api/chat", json={"session": session, "text": t.get("text"), "image": t.get("image"),
+                                                      "has_turns": i > 0}, stream=True, timeout=(5, 180)) as r:
                 r.raise_for_status()
                 for line in r.iter_lines(decode_unicode=True):
                     if not line.startswith("data:"):

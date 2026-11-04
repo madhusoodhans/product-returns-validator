@@ -6,8 +6,9 @@ import json
 import time
 from pathlib import Path
 
-import requests
 from PIL import Image, ImageOps
+
+from limits import Busy, Gate, post
 
 ROUTER_URL = os.environ.get("ROUTER_URL", "http://localhost:8899")
 D3_MODEL = "vllm-sr/d3-mini"
@@ -20,9 +21,9 @@ def d3(state, questions, images=(), model=D3_MODEL, timeout=(3, 30)):
     if images:
         body["images"] = list(images)
     t = time.perf_counter()
-    r = requests.post(f"{ROUTER_URL}/v1/systemone", json=body, timeout=timeout)
-    r.raise_for_status()
-    out = r.json()
+    with post("d3", f"{ROUTER_URL}/v1/systemone", json=body, timeout=timeout) as r:
+        r.raise_for_status()
+        out = r.json()
     u = out.get("usage") or {}
     return out["answers"], round((time.perf_counter() - t) * 1000, 1), (u.get("input_tokens") or 0) + (u.get("output_tokens") or 0)
 
@@ -34,6 +35,8 @@ except ImportError:
     pass
 
 Image.MAX_IMAGE_PIXELS = 60_000_000  # a 48 MP phone photo fits; decompression bombs raise instead of filling memory
+DECODE = Gate("image decode", slots=4, queue=100)  # a full-size 48 MP decode is ~150 MB
+SIDE = 1600
 
 
 class BadImage(ValueError):
@@ -54,14 +57,20 @@ def image_url(image):
             if not p.is_relative_to(ROOT / "data") or not p.is_file():
                 raise BadImage("unknown image path")
             raw = p.read_bytes()
-        im = ImageOps.exif_transpose(Image.open(io.BytesIO(raw))).convert("RGB")
-    except BadImage:
+        with DECODE:
+            im = Image.open(io.BytesIO(raw))
+            if im.format == "JPEG":  # decode at 1/2, 1/4 or 1/8 scale, still at least the target size
+                s = SIDE / max(im.size)
+                if s < 1:
+                    im.draft("RGB", (round(im.size[0] * s), round(im.size[1] * s)))
+            im = ImageOps.exif_transpose(im).convert("RGB")
+            im.thumbnail((SIDE, SIDE), Image.LANCZOS)
+            buf = io.BytesIO()
+            im.save(buf, "JPEG", quality=90)
+    except (BadImage, Busy):
         raise
     except Exception as e:  # PIL: not an image, truncated, too many pixels; base64 errors
         raise BadImage(f"{type(e).__name__}") from e
-    im.thumbnail((1600, 1600), Image.LANCZOS)
-    buf = io.BytesIO()
-    im.save(buf, "JPEG", quality=90)
     return "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode()
 
 
@@ -72,9 +81,9 @@ def chat(model, messages, max_tokens=300, schema=None, timeout=(3, 120)):
     if schema:
         body["response_format"] = {"type": "json_schema", "json_schema": {"name": "out", "schema": schema}}
     t = time.perf_counter()
-    r = requests.post(f"{ROUTER_URL}/v1/chat/completions", json=body, timeout=timeout)
-    r.raise_for_status()
-    out = r.json()
+    with post("chat", f"{ROUTER_URL}/v1/chat/completions", json=body, timeout=timeout) as r:
+        r.raise_for_status()
+        out = r.json()
     return (out["choices"][0]["message"]["content"].strip(), round((time.perf_counter() - t) * 1000, 1),
             (out.get("usage") or {}).get("total_tokens") or 0)
 
@@ -85,7 +94,7 @@ def chat_stream(model, messages, max_tokens=300, timeout=(3, 120)):
             "stream_options": {"include_usage": True}, "chat_template_kwargs": {"enable_thinking": False}}
     t = time.perf_counter()
     text, tokens = [], 0
-    with requests.post(f"{ROUTER_URL}/v1/chat/completions", json=body, timeout=timeout, stream=True) as r:
+    with post("chat", f"{ROUTER_URL}/v1/chat/completions", json=body, timeout=timeout, stream=True) as r:
         r.raise_for_status()
         for line in r.iter_lines(decode_unicode=True):
             if not line or not line.startswith("data:"):

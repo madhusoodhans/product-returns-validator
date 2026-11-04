@@ -86,6 +86,8 @@ export function useDemo() {
   const runRef = useRef(0);
   const greetingRef = useRef<string | null>(null);
   const used27Ref = useRef(false);
+  /** The server has seen a turn of this chat (a `done` came back). */
+  const hasTurnsRef = useRef(false);
   const opening = (): Msg[] => (greetingRef.current ? [{ id: mid(), role: "assistant", text: greetingRef.current, greeting: true }] : []);
 
   // Every chat opens with the customer greeting; the first chat gets it as soon as GET /api/customer answers.
@@ -133,9 +135,10 @@ export function useDemo() {
     let verdict: Verdict | undefined;
     let gotMessage = false;
     let streamError: string | null = null;
+    let expired: string | null = null;
     const sid = sessionRef.current;
     try {
-      await streamChat({ session: sid, ...input }, (e) => {
+      await streamChat({ session: sid, has_turns: hasTurnsRef.current, ...input }, (e) => {
         switch (e.type) {
           case "step":
             if (e.node === "reply" && e.status !== "skipped" && /qwen27b/.test(`${e.model ?? ""} ${(e.detail as { model?: string } | null)?.model ?? ""}`)) used27Ref.current = true;
@@ -150,7 +153,8 @@ export function useDemo() {
             if (e.order) setOrder(e.order);
             break;
           case "stats": { const { type: _t, ...s } = e; void _t; takeStats(s, sid); break; }
-          case "done": patch(uid, { turn: e.turn }); patch(aid, { turn: e.turn, streaming: false }); setLiveTurn(e.turn); break;
+          case "expired": expired = e.message; break;
+          case "done": if (sid === sessionRef.current) hasTurnsRef.current = true; patch(uid, { turn: e.turn }); patch(aid, { turn: e.turn, streaming: false }); setLiveTurn(e.turn); break;
           case "error":
             // The turn failed: every node not finished is marked failed (the running one carries the error), the
             // "Checking" state stops, and the `message` with verdict `error` that follows renders as a normal reply.
@@ -169,13 +173,23 @@ export function useDemo() {
       if (abortRef.current === ac) abortRef.current = null;
       setBusy(false);
     }
+    // The server restarted or dropped this chat: a new chat, with the notice under the greeting.
+    if (expired && sid === sessionRef.current) {
+      startChat(false);
+      setMessages((ms) => [...ms, { id: mid(), role: "assistant", text: expired ?? "" }]);
+    }
     return verdict;
   }, [takeStats]);
 
   /** New session: chat back to the greeting, empty flow and top bar (stats are per chat). */
   const reset = useCallback((fromSample = false) => {
     abortRef.current?.abort();
+    startChat(fromSample);
+  }, []);
+
+  function startChat(fromSample: boolean) {
     const s = newSession();
+    hasTurnsRef.current = false;
     sessionRef.current = s;
     setSession(s);
     setStats(null);
@@ -186,7 +200,7 @@ export function useDemo() {
     setFlow({});
     setLiveTurn(null);
     setReplay(null);
-  }, []);
+  }
 
   const stop = useCallback(() => {
     runRef.current++;

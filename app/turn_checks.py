@@ -11,6 +11,7 @@ import time
 
 import requests
 
+from limits import post
 from models import d3
 
 # the Router's management API (vllm-sr publishes it on 127.0.0.1:8080)
@@ -19,12 +20,13 @@ PREVIEW_UNCACHED_MS = 107.0  # median of 15 fresh messages, 2026-10-26
 
 
 def router_preview(messages):
-    """Returns (result dict, ms) or (None, ms) when the Router management API does not answer."""
+    """Returns (result dict, ms) or (None, ms) when the Router management API does not answer. Raises limits.Busy
+    when it is out of capacity (the d3-mini fallback would only add load)."""
     t = time.perf_counter()
     try:
-        r = requests.post(PREVIEW, json={"model": "returns/auto", "messages": messages}, timeout=(2, 10))
-        r.raise_for_status()
-        d = r.json()
+        with post("preview", PREVIEW, json={"model": "returns/auto", "messages": messages}, timeout=(2, 10)) as r:
+            r.raise_for_status()
+            d = r.json()
     except (requests.RequestException, ValueError):
         return None, round((time.perf_counter() - t) * 1000, 1)
     m = d.get("metrics") or {}

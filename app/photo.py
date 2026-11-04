@@ -13,6 +13,7 @@ Phase 0 with by-eye labels: 86/88 right on the photos without weak sources, no i
 Text in the photo asking for approval is flagged and shown; it never changes the verdict.
 """
 from concurrent.futures import ThreadPoolExecutor
+from contextvars import copy_context
 
 from models import d3
 
@@ -65,8 +66,9 @@ REAL_PHOTO_STATE = "A customer uploaded this image to a returns chat as evidence
 def check(product, image_data_url):
     """Returns (verdict, reasons, detail, ms, tokens). detail follows docs/API.md (image_check)."""
     with ThreadPoolExecutor(2) as pool:  # both requests at once; the Router caches the image features
-        main = pool.submit(d3, state(product), questions(product), [image_data_url])
-        real = pool.submit(d3, REAL_PHOTO_STATE, {"real_photo": {"type": "noul", "instructions": REAL_PHOTO[0]}},
+        # each thread runs in a copy of this context, so its 429s count for this turn (limits.start_turn)
+        main = pool.submit(copy_context().run, d3, state(product), questions(product), [image_data_url])
+        real = pool.submit(copy_context().run, d3, REAL_PHOTO_STATE, {"real_photo": {"type": "noul", "instructions": REAL_PHOTO[0]}},
                            [image_data_url])
         (a, ms, tokens), (ra, rms, rtok) = main.result(), real.result()
     ms, tokens = max(ms, rms), tokens + rtok

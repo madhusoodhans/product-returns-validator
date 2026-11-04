@@ -1,7 +1,7 @@
 /* Page shell: stats bar on top; sample demos, chat and the decision flow side by side. */
 import { useEffect, useState } from "react";
 import type { Theme } from "./components/arc/theme-switch/theme-switch";
-import { errText, getSamples, type Samples as SamplesData } from "./api";
+import { errText, getConfig, getSamples, type Samples as SamplesData } from "./api";
 import { useDemo } from "./useDemo";
 import { TopBar } from "./panels/TopBar";
 import { Samples } from "./panels/Samples";
@@ -29,13 +29,15 @@ export function App() {
   const [galleryOpen, setGalleryOpen] = useState(false);
   const demo = useDemo();
 
+  const [playAll, setPlayAll] = useState(false);
   useEffect(() => { getSamples().then(setSamples, (e) => setSamplesError(errText(e))); }, []);
+  useEffect(() => { getConfig().then((c) => setPlayAll(c.play_all !== false), () => setPlayAll(false)); }, []);
 
   return (
     <div className={styles.shell}>
       <TopBar stats={demo.stats} theme={theme} onTheme={setTheme} />
       <div className={styles.body}>
-        <Samples groups={samples.groups} error={samplesError} playing={demo.playing} outcomes={demo.outcomes} used27={demo.used27}
+        <Samples groups={samples.groups} error={samplesError} playing={demo.playing} outcomes={demo.outcomes} used27={demo.used27} playAll={playAll}
           onPlay={(g, sc) => demo.playScenario(g, sc)} onPlayAll={() => demo.playAll(samples.groups)} onStop={demo.stop} />
         <Chat messages={demo.messages} busy={demo.busy} playing={demo.playing} replayMsg={demo.replay?.msgId ?? null} liveTurn={demo.liveTurn}
           order={demo.order} policies={samples.policies}

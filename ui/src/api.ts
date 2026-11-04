@@ -2,7 +2,7 @@
 
 export type Verdict =
   | "accept" | "retake" | "mismatch" | "no_damage" | "not_eligible" | "human" | "clarify" | "blocked" | "need_photo" | "need_order"
-  | "need_problem" | "closed" | "off_topic" | "info" | "bad_file" | "error" | "ended";
+  | "need_problem" | "closed" | "off_topic" | "info" | "bad_file" | "error" | "ended" | "busy" | "rate_limited";
 
 /** `model`: the LLM that wrote this turn's reply in the last bench run (null for a fixed reply). */
 export interface Turn { text?: string; image?: string; expect?: Verdict; model?: "qwen9b" | "qwen27b" | null }
@@ -84,6 +84,8 @@ export type ChatEvent =
   | { type: "message"; role: "assistant"; text: string; verdict?: Verdict; order?: OrderInfo | null; policy_ref?: PolicyRef | null; ended?: Ended | null }
   | ({ type: "stats" } & Stats)
   | { type: "done"; turn: string }
+  /** The server no longer knows this chat (restarted or dropped it): start a new one. */
+  | { type: "expired"; message: string }
   | { type: "error"; message: string };
 
 const JSON_TIMEOUT_MS = 8000;
@@ -107,6 +109,8 @@ async function getJson<T>(path: string): Promise<T> {
 export const getSamples = () =>
   getJson<Partial<Samples>>("api/samples").then((d): Samples => ({ groups: d.groups ?? [], policies: d.policies ?? {} }));
 export const getCustomer = () => getJson<Customer>("api/customer");
+/** GET /api/config: `play_all` false hides Play all (hosted copy). */
+export const getConfig = () => getJson<{ play_all?: boolean }>("api/config");
 export const getGallery = () => getJson<GalleryItem[]>("api/gallery");
 export const getStats = (session: string) => getJson<Stats>(`api/stats?session=${encodeURIComponent(session)}`);
 /** The contract says "the stored step events of a past turn"; accept `{steps: [...]}`, `{events: [...]}` or a bare array. */
@@ -117,7 +121,8 @@ export const getTurn = (turn: string) =>
 
 /** POST /api/chat and feed each SSE event to onEvent. Resolves when the stream ends. */
 export async function streamChat(
-  body: { session: string; text?: string; image?: string; action?: "review" },
+  /** `has_turns`: this chat already had a turn, so an unknown session is an expired chat, not a new one. */
+  body: { session: string; text?: string; image?: string; action?: "review"; has_turns?: boolean },
   onEvent: (e: ChatEvent) => void,
   signal?: AbortSignal,
 ): Promise<void> {
@@ -153,7 +158,9 @@ export async function streamChat(
 }
 
 export const errText = (e: unknown) => String((e as Error)?.message || e);
+/** A random UUID (the server accepts only UUID-shaped session ids); randomUUID needs a secure context. */
 export const newSession = () =>
-  typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `s-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+  typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID()
+    : "10000000-1000-4000-8000-100000000000".replace(/[018]/g, (c) => (+c ^ (Math.random() * 16) >> (+c / 4)).toString(16));
 /** Sample paths are relative ("samples/phone/x.jpg"); data URLs pass through. */
 export const imageUrl = (p: string) => (p.startsWith("data:") || p.startsWith("blob:") || /^https?:/.test(p) ? p : p.replace(/^\/+/, ""));

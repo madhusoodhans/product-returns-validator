@@ -1,7 +1,7 @@
 /* Labels, tones and icons shared by the panels. */
 import type { LucideIcon } from "lucide-react";
 import {
-  Ban, Camera, CircleAlert, CircleCheck, CircleDot, CircleHelp, CircleSlash, EyeOff, FileX, Hash, Info, Lock, MessageCircleQuestion, MessageSquareOff, RefreshCw, Shuffle, ShieldAlert, UserRound,
+  Ban, Camera, CircleAlert, CircleCheck, CircleDot, CircleHelp, CircleSlash, EyeOff, FileX, Hash, Hourglass, Info, Lock, MessageCircleQuestion, MessageSquareOff, RefreshCw, Shuffle, ShieldAlert, UserRound,
 } from "lucide-react";
 import type { BadgeTone } from "./components/arc/badge/badge";
 import type { NodeKey, Verdict } from "./api";
@@ -25,6 +25,8 @@ export const VERDICT: Record<Verdict, VerdictMeta> = {
   bad_file: { label: "Not a photo file", short: "Bad file", tone: "warning", icon: FileX },
   ended: { label: "Chat ended", short: "Ended", tone: "neutral", icon: MessageSquareOff },
   error: { label: "Error", short: "Error", tone: "danger", icon: CircleAlert },
+  busy: { label: "Service busy", short: "Busy", tone: "warning", icon: Hourglass },
+  rate_limited: { label: "Too many messages", short: "Slow down", tone: "warning", icon: Hourglass },
 };
 /** Known verdicts get their entry; an unknown one gets a neutral chip with its own name, so a new server verdict never breaks the page. */
 export const verdictMeta = (v: string | undefined | null): VerdictMeta | null =>

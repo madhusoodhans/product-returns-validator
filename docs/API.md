@@ -35,7 +35,8 @@ Images in the sample folder for the 📁 picker: `[{"path": "samples/phone/phone
 Images are served at `/<path>`.
 
 ## POST /api/chat → `text/event-stream`
-Body: `{"session": "uuid", "text": "...?", "image": "samples/... or data:image/jpeg;base64,...?"}` (text, image or both).
+Body: `{"session": "uuid", "text": "...?", "image": "samples/... or data:image/jpeg;base64,...?", "has_turns": false}`
+(text, image or both; `session` must be a UUID, see "Many visitors" below).
 
 Events (each `data:` is JSON with a `type`):
 
@@ -150,5 +151,33 @@ The stored `step` events of a past turn, so clicking an earlier message replays 
 - Yes/no questions where yes is good ("Shows a phone"): `borderline_from` above `threshold`; colour always comes from `status`.
 - Each `escalated` entry carries its own `status` (ok | borderline | bad).
 - `image_check` detail also carries `image` (the path or turn image id D3 judged).
-- POST /api/reset clears sessions and stats (between demo runs).
+- ~~POST /api/reset clears sessions and stats~~ (removed 2026-11-04: it wiped every visitor's chat; the UI never used it).
 - Stats `usd_per_million_chats` uses env GPU_USD_PER_HOUR (default 2.59, see README.md).
+
+## Many visitors (2026-11-04)
+- `session` must be a UUID (`crypto.randomUUID()`), else 400; there is no shared "default" chat any more.
+  `GET /api/stats?session=` also wants a UUID.
+- `has_turns` (bool): the page already had a turn in this chat. A session the server does not know (restarted, or the
+  chat was dropped) is a new chat when `has_turns` is false; when true the stream is one event
+  `{"type": "expired", "message": "This chat expired, starting a new one."}` and the page starts a new chat.
+- Chats live in memory: dropped 30 min after their last message, at most 300 (least recently used dropped first; a
+  chat mid-turn is never dropped). Dropping removes its stats and stored turns (`/api/turn/{id}` then 404s). A photo
+  kept for a chat without an order is dropped after 10 min.
+- Limits, answered without any model call by a `message` with verdict `rate_limited` ("You are sending messages
+  faster than this demo allows. ..."; the `guardrail` step is `blocked`, the rest `skipped`; no `done`, no stats):
+  10 messages per minute per chat; per visitor IP (first `X-Forwarded-For` hop, else the peer) 30 messages and 5 new
+  chats per minute. Requests from loopback without `X-Forwarded-For` (the presenter's machine, an SSH tunnel) have no
+  per-IP limits.
+- Capacity: at most 12 model calls at once per API (D3 `/v1/systemone`, chat completions, routing preview; env
+  `MODEL_SLOTS`), others wait. A wait over 15 s (`MODEL_WAIT_S`), a 429/503 that repeats after one retry (Retry-After
+  honoured, at most 5 s), or more than 50 chats mid-turn ends the turn with verdict `busy`, text "The service is busy,
+  please try again.": the node that was running is `failed` with summary "Service busy: <why>" and
+  `detail.capacity`, the nodes not reached are `skipped`; no `done`, no stats. At most 4 uploads are decoded at once
+  (JPEGs are decoded at reduced scale). The 25 MB body limit is checked before the body is read (413).
+- New verdicts: `busy`, `rate_limited`.
+- `GET /api/config`: `{"play_all": true}` (env `PLAY_ALL`, default 1; 0 hides Play all, as on the hosted Space).
+- `GET /healthz`: `{"ok": true}`, no model calls (liveness). `GET /health` still probes every model, cached 60 s.
+- `GET /api/metrics`: `{"active_chats", "chats_in_memory", "busy", "rate_limited", "expired", "turns_last_hour",
+  "queued_calls": {"d3", "chat", "preview"}, "throttled_429_503", "memory_mb"}` (counts since start).
+- The server log has one line per turn: `turn <first 8 of chat id> verdict=... ms=... models=... 429s=...` (no
+  message text).
