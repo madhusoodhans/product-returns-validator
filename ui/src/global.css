@@ -1,11 +1,8 @@
 /* Page-level styles. Arc's foundation.css owns the semantic tokens; this file adds the few shared helpers. */
 @import "./components/arc/foundation.css";
 
-/* AMD brand font (Klavika). Arc uses regular and medium weights only. */
-@font-face { font-family: "Klavika"; src: url("./assets/fonts/Klavika-Regular.otf") format("opentype"); font-weight: 400; font-style: normal; font-display: swap; }
-@font-face { font-family: "Klavika"; src: url("./assets/fonts/Klavika-Medium.otf") format("opentype"); font-weight: 500; font-style: normal; font-display: swap; }
-
-:root { --font-display: "Klavika", sans-serif; --font-body: "Klavika", sans-serif; --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; }
+/* Geist for headings and Inter for text, bundled from @fontsource (see main.tsx), as on the demos landing page. */
+:root { --font-display: "Geist Variable", sans-serif; --font-body: "Inter Variable", sans-serif; --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; }
 
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }

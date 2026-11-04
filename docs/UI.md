@@ -117,7 +117,7 @@ of `ms` of every step that is not skipped. Y adds:
   so questions where "yes" is good (borderline_from above threshold) and "yes" is bad both work. Colour comes from `status`.
 - `stats.d3_ms_median`, `share`, `model_seconds`, `tokens`, `usd_per_million_chats` may be missing or null; the top bar shows a dash.
   The comparisons show a dash until the chat has a turn and `baseline_27b` is set.
-- Fonts: Klavika Regular and Medium (`src/assets/fonts`, bundled by Vite); checked in Chromium: body, title and stats compute to Klavika and `document.fonts` reports both faces loaded.
+- Fonts: Geist (headings) and Inter (text), bundled from @fontsource as on the demos landing page.
 
 README GIF: `docs/demo.gif` ("Sole came off" on the live server). Play all on the live server: 16/16 matched in
 about 125 s; the banner shows at the end of every sample that ends the chat, and playback goes on to the next sample.
