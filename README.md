@@ -265,6 +265,7 @@ Environment variables of the demo server (`app/server.py`, also honoured by `sta
 | `HOST` | `127.0.0.1` | Address the demo server listens on. Keep it on loopback and use an SSH tunnel. |
 | `PORT` | `8602` | Port of the demo server. |
 | `PLAY_ALL` | `1` | `0` hides the Play all button (the hosted Space sets it). |
+| `LANDING_URL` | empty | Page of all demos: the top bar links back to it ("All demos", passing the theme as `?theme=`). Empty hides the link. |
 | `HEALTH_INTERVAL` / `BREAKER_S` | 30 / 30 | Seconds between model probes, and how long a model that failed 3 calls in a row is skipped. |
 | `D3_TIMEOUT_S` / `PREVIEW_TIMEOUT_S` / `QWEN9B_TIMEOUT_S` / `QWEN27B_TIMEOUT_S` | 10 / 5 / 30 / 60 | Longest model call (a streamed reply: the whole stream). |
 | `ROUTER_API_KEY` / `ROUTER_ADMIN_API_KEY` / `D3_MODEL` | none / `ROUTER_API_KEY` / `vllm-sr/d3-mini` | Bearer token and D3 model name for hosted APIs; the local Router needs no key. |

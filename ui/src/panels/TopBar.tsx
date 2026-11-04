@@ -1,7 +1,8 @@
-/* Title, the stats of the current chat session (`stats` events / GET /api/stats?session=), the theme switch.
+/* Link back to the page of all demos, title, the stats of the current chat session (`stats` events / GET /api/stats?session=), the theme switch.
  * One row of stat blocks spread over the bar in two groups: "This chat" counts and "Routed vs all on Qwen 27B".
  * Missing values render as a dash; a new chat starts from an empty bar. */
 import type { ReactNode } from "react";
+import { ArrowLeft } from "lucide-react";
 import { ThemeSwitch, type Theme } from "../components/arc/theme-switch/theme-switch";
 import type { Health, Stats } from "../api";
 import { DASH, fmtCompact, fmtInt, fmtPct } from "../format";
@@ -54,13 +55,27 @@ function HealthBadge({ health }: { health: Health | null }) {
   );
 }
 
-export function TopBar({ stats, health, theme, onTheme }: { stats: Stats | null; health: Health | null; theme: Theme; onTheme: (t: Theme) => void }) {
+/** The landing page is another origin, so its localStorage theme is not shared: hand the theme over as ?theme=. */
+function backHref(landingUrl: string, theme: Theme) {
+  try {
+    const u = new URL(landingUrl, location.href);
+    u.searchParams.set("theme", theme);
+    return u.toString();
+  } catch { return landingUrl; }
+}
+
+export function TopBar({ stats, health, theme, onTheme, landingUrl }: { stats: Stats | null; health: Health | null; theme: Theme; onTheme: (t: Theme) => void; landingUrl?: string }) {
   const s = stats ?? {};
   const share = s.share ?? null;
   const ready = (s.turns ?? 0) > 0;
   return (
     <header className={styles.bar}>
       <div className={styles.brand}>
+        {landingUrl && (
+          <a className={styles.back} href={backHref(landingUrl, theme)} aria-label="Back to all demos" title="All demos">
+            <ArrowLeft size={16} aria-hidden="true" /><span className={styles.backText}>All demos</span>
+          </a>
+        )}
         <h1 title="D3 decides, Qwen chats">Returns validator Demo</h1>
       </div>
 

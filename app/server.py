@@ -37,6 +37,7 @@ PORT = int(os.environ.get("PORT", "8602"))
 MAX_BODY = 25_000_000   # a base64 phone photo is ~4-8 MB
 HOST = os.environ.get("HOST", "127.0.0.1")
 PLAY_ALL = os.environ.get("PLAY_ALL", "1") != "0"
+LANDING_URL = os.environ.get("LANDING_URL", "")   # "All demos" link in the top bar; empty hides it
 MAX_CHATS, IDLE_S, PHOTO_S = 300, 30 * 60, 10 * 60
 MAX_ACTIVE = 50          # chats mid-turn at once
 UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
@@ -322,7 +323,8 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/metrics":
             return self._json(200, metrics())
         if path == "/api/config":
-            return self._json(200, {"play_all": PLAY_ALL, "health": availability.health()})
+            return self._json(200, {"play_all": PLAY_ALL, "landing_url": LANDING_URL,
+                                    "health": availability.health()})
         if path == "/api/samples":
             return self._json(200, samples())
         if path == "/api/customer":

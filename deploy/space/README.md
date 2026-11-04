@@ -26,6 +26,10 @@ Chats are kept in memory only, for 30 minutes after the last message; a photo se
 for 10 minutes. There are limits per visitor (messages per minute, new chats per minute); when the models are busy
 the assistant says so and you can try again.
 
+<!-- Space variables: ROUTER_URL, ROUTER_ADMIN_URL (and ROUTER_API_KEY for a hosted API) reach the models; the Dockerfile
+sets PLAY_ALL=0. Optional: LANDING_URL, the page of all demos, adds an "All demos" link to the top bar (empty hides it).
+All variables: README.md, Configuration. -->
+
 Source code, setup and how it was tuned: <https://github.com/madhusoodhans/product-returns-validator>
 
 ## Credits

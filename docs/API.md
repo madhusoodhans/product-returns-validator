@@ -175,7 +175,8 @@ The stored `step` events of a past turn, so clicking an earlier message replays 
   `detail.capacity`, the nodes not reached are `skipped`; no `done`, no stats. At most 4 uploads are decoded at once
   (JPEGs are decoded at reduced scale). The 25 MB body limit is checked before the body is read (413).
 - New verdicts: `busy`, `rate_limited`.
-- `GET /api/config`: `{"play_all": true}` (env `PLAY_ALL`, default 1; 0 hides Play all, as on the hosted Space).
+- `GET /api/config`: `{"play_all": true, "landing_url": "", "health": {...}}` (env `PLAY_ALL`, default 1; 0 hides Play all,
+  as on the hosted Space; env `LANDING_URL`, default empty, the "All demos" link, hidden when empty).
 - `GET /healthz`: `{"ok": true}`, no model calls (liveness). `GET /health`: see "Model availability" below.
 - `GET /api/metrics`: `{"active_chats", "chats_in_memory", "busy", "rate_limited", "expired", "turns_last_hour",
   "queued_calls": {"d3", "chat", "preview"}, "throttled_429_503", "memory_mb"}` (counts since start).

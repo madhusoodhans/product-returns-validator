@@ -6,10 +6,20 @@
 <title>Returns validator Demo</title>
 <meta name="description" content="A customer reports a damaged delivery; D3 decides eligibility and photo quality, Qwen words the reply.">
 <script>
-  // Theme before first paint: stored choice, else the system preference. Arc themes key off data-theme on <html>.
+  // Theme before first paint: ?theme= from the landing page (another origin, so it cannot share localStorage), else the
+  // stored choice, else the system preference. Arc themes key off data-theme on <html>.
   (function () {
     var t = null;
-    try { t = localStorage.getItem("theme"); } catch (e) {}
+    var q = new URLSearchParams(location.search);
+    var p = q.get("theme");
+    if (p === "light" || p === "dark") {
+      t = p;
+      try { localStorage.setItem("theme", p); } catch (e) {}
+      q.delete("theme");
+      var s = q.toString();
+      try { history.replaceState(history.state, "", location.pathname + (s ? "?" + s : "") + location.hash); } catch (e) {}
+    }
+    if (!t) try { t = localStorage.getItem("theme"); } catch (e) {}
     if (t !== "light" && t !== "dark") t = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
     document.documentElement.dataset.theme = t;
   })();

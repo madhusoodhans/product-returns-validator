@@ -47,11 +47,14 @@ export function App() {
 
   const [playAll, setPlayAll] = useState(false);
   useEffect(() => { getSamples().then(setSamples, (e) => setSamplesError(errText(e))); }, []);
-  useEffect(() => { getConfig().then((c) => setPlayAll(c.play_all !== false), () => setPlayAll(false)); }, []);
+  const [landingUrl, setLandingUrl] = useState("");
+  useEffect(() => {
+    getConfig().then((c) => { setPlayAll(c.play_all !== false); setLandingUrl(c.landing_url ?? ""); }, () => setPlayAll(false));
+  }, []);
 
   return (
     <div className={styles.shell}>
-      <TopBar stats={demo.stats} health={health} theme={theme} onTheme={setTheme} />
+      <TopBar stats={demo.stats} health={health} theme={theme} onTheme={setTheme} landingUrl={landingUrl} />
       <div className={styles.body}>
         <Samples groups={samples.groups} error={samplesError} playing={demo.playing} outcomes={demo.outcomes} used27={demo.used27} playAll={playAll}
           onPlay={(g, sc) => demo.playScenario(g, sc)} onPlayAll={() => demo.playAll(samples.groups)} onStop={demo.stop} />

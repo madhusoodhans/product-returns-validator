@@ -123,8 +123,9 @@ export interface Health {
   models?: Record<string, { state: "up" | "down" | "unknown"; reason?: string | null; retry_in_s?: number | null }>;
 }
 export const getHealth = () => getJson<Health>("api/health");
-/** GET /api/config: `play_all` false hides Play all (hosted copy). */
-export const getConfig = () => getJson<{ play_all?: boolean }>("api/config");
+/** GET /api/config: `play_all` false hides Play all (hosted copy); `landing_url` is the page of all demos ("" hides the link). */
+export type Config = { play_all?: boolean; landing_url?: string };
+export const getConfig = () => getJson<Config>("api/config");
 export const getGallery = () => getJson<GalleryItem[]>("api/gallery");
 export const getStats = (session: string) => getJson<Stats>(`api/stats?session=${encodeURIComponent(session)}`);
 /** The contract says "the stored step events of a past turn"; accept `{steps: [...]}`, `{events: [...]}` or a bare array. */
