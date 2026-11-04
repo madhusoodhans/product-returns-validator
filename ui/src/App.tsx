@@ -1,7 +1,7 @@
 /* Page shell: stats bar on top; sample demos, chat and the decision flow side by side. */
 import { useEffect, useState } from "react";
 import type { Theme } from "./components/arc/theme-switch/theme-switch";
-import { errText, getConfig, getSamples, type Samples as SamplesData } from "./api";
+import { errText, getConfig, getHealth, getSamples, type Health, type Samples as SamplesData } from "./api";
 import { useDemo } from "./useDemo";
 import { TopBar } from "./panels/TopBar";
 import { Samples } from "./panels/Samples";
@@ -22,12 +22,28 @@ function useTheme(): [Theme, (t: Theme) => void] {
   return [theme, setTheme];
 }
 
+const HEALTH_POLL_MS = 15_000;
+
+/** The server's view of which models are up: polled, and fetched again after every turn (a turn may have found one down). */
+function useHealth(busy: boolean): Health | null {
+  const [health, setHealth] = useState<Health | null>(null);
+  useEffect(() => {
+    const load = () => getHealth().then(setHealth, () => setHealth(null));
+    load();
+    const id = setInterval(load, HEALTH_POLL_MS);
+    return () => clearInterval(id);
+  }, []);
+  useEffect(() => { if (!busy) getHealth().then(setHealth, () => { /* keep the last value */ }); }, [busy]);
+  return health;
+}
+
 export function App() {
   const [theme, setTheme] = useTheme();
   const [samples, setSamples] = useState<SamplesData>({ groups: [], policies: {} });
   const [samplesError, setSamplesError] = useState<string | null>(null);
   const [galleryOpen, setGalleryOpen] = useState(false);
   const demo = useDemo();
+  const health = useHealth(demo.busy);
 
   const [playAll, setPlayAll] = useState(false);
   useEffect(() => { getSamples().then(setSamples, (e) => setSamplesError(errText(e))); }, []);
@@ -35,7 +51,7 @@ export function App() {
 
   return (
     <div className={styles.shell}>
-      <TopBar stats={demo.stats} theme={theme} onTheme={setTheme} />
+      <TopBar stats={demo.stats} health={health} theme={theme} onTheme={setTheme} />
       <div className={styles.body}>
         <Samples groups={samples.groups} error={samplesError} playing={demo.playing} outcomes={demo.outcomes} used27={demo.used27} playAll={playAll}
           onPlay={(g, sc) => demo.playScenario(g, sc)} onPlayAll={() => demo.playAll(samples.groups)} onStop={demo.stop} />

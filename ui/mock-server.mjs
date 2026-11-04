@@ -132,6 +132,17 @@ const caseOf = (path) => {
 const productOfPath = (path) => String(path).match(/samples\/([^/]+)\//)?.[1] ?? null;
 const WRONG_SHOWS = { laptop: "mug", suitcase: "lamp", phone: "headphones", mug: "glass", glass: "mug", sneaker: "suitcase", headphones: "phone", lamp: "suitcase", bottle: "glass" };
 
+const HEALTH_WORDS = {
+  ok: "All systems working", qwen9b_down: "Using Qwen 27B for all replies: Qwen 9B unavailable",
+  standard: "Standard replies: language models unavailable", unavailable: "Assistant unavailable",
+};
+function mockHealth() {
+  const status = HEALTH_WORDS[process.env.MOCK_HEALTH] ? process.env.MOCK_HEALTH : "ok";
+  const down = { ok: [], qwen9b_down: ["qwen9b"], standard: ["qwen9b", "qwen27b"], unavailable: ["d3"] }[status];
+  const models = Object.fromEntries(["d3", "preview", "qwen9b", "qwen27b"].map((m) => [m, { state: down.includes(m) ? "down" : "up" }]));
+  return { ok: status === "ok", status, message: HEALTH_WORDS[status], models };
+}
+
 function gallery() {
   // Real files under data/samples/<product>/; a small synthetic set only if the folder is empty.
   const dir = join(DATA, "samples"), real = [];
@@ -747,6 +758,8 @@ createServer(async (req, res) => {
     if (p === "/api/samples" && req.method === "GET") return json(res, 200, samplesPayload());
     if (p === "/api/customer" && req.method === "GET") return json(res, 200, customerPayload());
     if (p === "/api/gallery" && req.method === "GET") return json(res, 200, gallery());
+    // MOCK_HEALTH=qwen9b_down|standard|unavailable shows the top bar's health badge in that state
+    if (p === "/api/health" && req.method === "GET") return json(res, 200, mockHealth());
     if (p === "/api/stats" && req.method === "GET") return json(res, 200, statsPayload(url.searchParams.get("session") || ""));
     if (p === "/api/reset" && req.method === "POST") {
       sessions.clear(); turns.clear();

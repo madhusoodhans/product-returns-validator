@@ -12,14 +12,16 @@ import statistics
 import sys
 import threading
 import time
+import traceback
 from collections import OrderedDict, deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import availability  # noqa: E402
 import claim  # noqa: E402
-from flow import NODES, Session  # noqa: E402
+from flow import NODES, Session, failed_steps  # noqa: E402
 from limits import BUSY_TEXT, COUNTS, GATES, Busy, Limits, start_turn  # noqa: E402
 
 try:  # iPhone photos
@@ -40,6 +42,7 @@ MAX_ACTIVE = 50          # chats mid-turn at once
 UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 RATE_TEXT = "You are sending messages faster than this demo allows. Please wait a minute and try again."
 EXPIRED_TEXT = "This chat expired, starting a new one."
+ERROR_TEXT = "Sorry, something went wrong on our side. Please send that again."
 # Price of one GPU hour for the $ figures: DigitalOcean's on-demand MI300X GPU Droplet price per GPU (checked
 # 2026-10-26). Set your own cloud's price.
 GPU_USD_PER_HOUR = float(os.environ.get("GPU_USD_PER_HOUR", "2.59"))
@@ -97,53 +100,6 @@ def baseline_turn(text, image):
     if a:
         return a["ms"] / 1000, a["tokens"]
     return BASELINE["seconds"] / BASELINE["turns"], round(BASELINE["tokens"] / BASELINE["turns"])
-
-
-_health = {"at": 0.0, "value": None}
-_health_lock = threading.Lock()
-HEALTH_TTL = 60
-
-
-def health():
-    """Each part, probed the way the flow calls it (cached for HEALTH_TTL s; one probe at a time, others get the
-    cached value). ok is true when all are up."""
-    import requests
-    from models import ROUTER_URL, chat, d3
-    from turn_checks import router_preview
-    fresh = lambda: _health["value"] and time.time() - _health["at"] < HEALTH_TTL  # noqa: E731
-    if fresh():
-        return _health["value"]
-    if not _health_lock.acquire(blocking=_health["value"] is None):
-        return _health["value"]
-    try:
-        if fresh():
-            return _health["value"]
-        parts, detail = {}, {}
-
-        def probe(name, fn):
-            try:
-                fn()
-                parts[name] = True
-            except Exception as e:  # noqa: BLE001
-                parts[name], detail[name] = False, f"{type(e).__name__}: {str(e)[:200]}"
-
-        probe("router", lambda: requests.get(f"{ROUTER_URL}/v1/models", timeout=5).raise_for_status())
-
-        def preview():
-            pv, _ms = router_preview([{"role": "user", "content": "hello"}])
-            if pv is None:
-                raise RuntimeError("no answer from the Router management API (ROUTER_ADMIN_URL)")
-            if not pv["decision"] or not str(pv["decision"]).startswith("returns"):
-                raise RuntimeError(f"returns/auto is not configured (decision {pv['decision']!r}); see deploy/router.yaml")
-        probe("vela_routing", preview)
-        probe("d3", lambda: d3("health check", {"q": {"type": "noul", "instructions": "This is a test."}}, timeout=(3, 20)))
-        probe("qwen9b", lambda: chat("qwen9b", [{"role": "user", "content": "Say OK."}], max_tokens=2, timeout=(3, 30)))
-        probe("qwen27b", lambda: chat("qwen27b", [{"role": "user", "content": "Say OK."}], max_tokens=2, timeout=(3, 60)))
-        value = {"ok": all(parts.values()), **parts, "detail": detail}
-        _health.update(at=time.time(), value=value)
-        return value
-    finally:
-        _health_lock.release()
 
 
 class Chat:
@@ -225,7 +181,8 @@ class State:
 STATE = State()
 LIMITS = Limits()
 ACTIVE = threading.BoundedSemaphore(MAX_ACTIVE)   # chats mid-turn
-METRICS = {"active": 0, "busy": 0, "rate_limited": 0, "expired": 0, "turns": deque()}   # turns: end times
+METRICS = {"active": 0, "busy": 0, "rate_limited": 0, "expired": 0, "unavailable": 0, "errors": 0,
+           "turns": deque()}   # turns: end times
 _metrics_lock = threading.Lock()
 
 
@@ -357,13 +314,15 @@ class Handler(BaseHTTPRequestHandler):
         path = unquote(urlparse(self.path).path)
         if path == "/healthz":
             return self._json(200, {"ok": True})
-        if path in ("/health", "/api/health"):
-            h = health()
+        if path == "/health":   # for scripts: 503 unless every model is up
+            h = availability.health()
             return self._json(200 if h["ok"] else 503, h)
+        if path == "/api/health":   # for the page's health badge: always 200
+            return self._json(200, availability.health())
         if path == "/api/metrics":
             return self._json(200, metrics())
         if path == "/api/config":
-            return self._json(200, {"play_all": PLAY_ALL})
+            return self._json(200, {"play_all": PLAY_ALL, "health": availability.health()})
         if path == "/api/samples":
             return self._json(200, samples())
         if path == "/api/customer":
@@ -467,6 +426,8 @@ class Handler(BaseHTTPRequestHandler):
                     nodes[ev["node"]] = ev["status"]
                 if ev["type"] == "message":
                     verdict = ev["verdict"]
+                    if verdict == "unavailable":
+                        note("unavailable")
                 if ev["type"] == "done" and ev.get("no_turn"):
                     ev = {"type": "done", "turn": ev["turn"]}   # a message to an ended chat: no stats
                 elif ev["type"] == "done":
@@ -481,10 +442,12 @@ class Handler(BaseHTTPRequestHandler):
             self._end_turn(session, BUSY_TEXT, "busy", busy_steps(nodes, e))
         except (BrokenPipeError, ConnectionResetError, TimeoutError):
             raise
-        except Exception as e:  # model or Router failure: end the turn cleanly, keep serving
+        except Exception:  # a bug: end the turn cleanly, keep serving; the detail goes to the log only
             verdict = "error"
-            self._end_turn(session, "Sorry, something went wrong on our side. Please send that again.", "error",
-                           [{"type": "error", "message": f"{type(e).__name__}: {str(e)[:300]}"}])
+            note("errors")
+            print(f"turn {sid[:8]} failed:\n{traceback.format_exc()}", flush=True)
+            self._end_turn(session, ERROR_TEXT, "error",
+                           failed_steps(nodes, "Something went wrong on our side"))
         finally:
             with _metrics_lock:
                 METRICS["turns"].append(time.time())
@@ -506,4 +469,5 @@ class Handler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     print(f"returns validator demo on http://{HOST}:{PORT} (play all: {PLAY_ALL})", flush=True)
     threading.Thread(target=sweeper, daemon=True).start()
+    availability.start_probes()
     Server((HOST, PORT), Handler).serve_forever()

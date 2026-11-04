@@ -9,10 +9,9 @@ fallbacks below take over.
 import os
 import time
 
-import requests
-
+from availability import Unavailable, call, timeout
 from limits import post
-from models import d3
+from models import d3, headers
 
 # the Router's management API (vllm-sr publishes it on 127.0.0.1:8080)
 PREVIEW = os.environ.get("ROUTER_ADMIN_URL", "http://localhost:8080") + "/api/v1/routing/preview"
@@ -20,14 +19,18 @@ PREVIEW_UNCACHED_MS = 107.0  # median of 15 fresh messages, 2026-10-26
 
 
 def router_preview(messages):
-    """Returns (result dict, ms) or (None, ms) when the Router management API does not answer. Raises limits.Busy
-    when it is out of capacity (the d3-mini fallback would only add load)."""
+    """Returns (result dict, ms) or (None, ms) when the Router management API is down, fails or times out (no request
+    is sent while it is marked down). Raises limits.Busy when it is out of capacity (the d3-mini fallback would only
+    add load)."""
     t = time.perf_counter()
     try:
-        with post("preview", PREVIEW, json={"model": "returns/auto", "messages": messages}, timeout=(2, 10)) as r:
-            r.raise_for_status()
-            d = r.json()
-    except (requests.RequestException, ValueError):
+        with call("preview"):
+            with post("preview", PREVIEW, json={"model": "returns/auto", "messages": messages},
+                      headers=headers(admin=True), timeout=timeout("preview")) as r:
+                r.raise_for_status()
+                d = r.json()
+            d.get("metrics")
+    except Unavailable:
         return None, round((time.perf_counter() - t) * 1000, 1)
     m = d.get("metrics") or {}
     return {"decision": (d.get("decision_result") or {}).get("decision_name"),

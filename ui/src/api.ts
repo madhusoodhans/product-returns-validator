@@ -2,7 +2,7 @@
 
 export type Verdict =
   | "accept" | "retake" | "mismatch" | "no_damage" | "not_eligible" | "human" | "clarify" | "blocked" | "need_photo" | "need_order"
-  | "need_problem" | "closed" | "off_topic" | "info" | "bad_file" | "error" | "ended" | "busy" | "rate_limited";
+  | "need_problem" | "closed" | "off_topic" | "info" | "bad_file" | "error" | "ended" | "busy" | "rate_limited" | "unavailable";
 
 /** `model`: the LLM that wrote this turn's reply in the last bench run (null for a fixed reply). */
 export interface Turn { text?: string; image?: string; expect?: Verdict; model?: "qwen9b" | "qwen27b" | null }
@@ -52,7 +52,11 @@ export interface GuardrailDetail {
   jailbreak?: number; pii?: boolean; flagged?: boolean; complaint?: number; router_decision?: string; scope_check?: D3Detail | null;
 }
 /** Vela's pick for this turn; `chosen` is null when a guard decision means no model is called. No probabilities. */
-export interface RouterDetail { chosen?: string | null; router_decision?: string; reason?: string }
+export interface RouterDetail {
+  chosen?: string | null; router_decision?: string; reason?: string;
+  /** Set when an LLM is down: the LLM that writes the reply instead (null: a standard reply, no LLM), and which are down. */
+  fallback?: string | null; unavailable?: string[];
+}
 /** D3 order matching on the claim step (no order number in the message): one choice question `order`. `ms` only if the server times it. */
 export interface OrderMatch extends D3Detail { threshold?: number; ms?: number }
 export interface ClaimDetail {
@@ -62,7 +66,10 @@ export interface PolicyDetail { rules: { label: string; ok: boolean }[] }
 export interface DecisionDetail { verdict: Verdict; reasons?: string[]; rule?: string }
 /** D3 check of the worded reply before it is streamed; a reply that claims an approval not given is replaced. */
 export interface ReplyCheck { model?: string; claims_approval: number; threshold: number; replaced: boolean; ms?: number; original?: string }
-export interface ReplyDetail { model?: string; tokens?: number; reply_check?: ReplyCheck | null }
+/** `standard`: no LLM could word the reply, so a fixed template words the decision (`reason` says why). */
+export interface ReplyDetail {
+  model?: string | null; tokens?: number; reply_check?: ReplyCheck | null; fallback_from?: string; standard?: boolean; reason?: string;
+}
 
 export interface StepEvent {
   type: "step"; node: NodeKey; status: NodeStatus; model?: string; ms?: number; summary?: string; detail?: unknown;
@@ -109,6 +116,13 @@ async function getJson<T>(path: string): Promise<T> {
 export const getSamples = () =>
   getJson<Partial<Samples>>("api/samples").then((d): Samples => ({ groups: d.groups ?? [], policies: d.policies ?? {} }));
 export const getCustomer = () => getJson<Customer>("api/customer");
+/** GET /api/health: which models are up, and the top bar's plain-words status (docs/API.md "Model availability"). */
+export type HealthStatus = "ok" | "checking" | "preview_down" | "qwen9b_down" | "qwen27b_down" | "standard" | "unavailable";
+export interface Health {
+  ok: boolean; status: HealthStatus | string; message: string;
+  models?: Record<string, { state: "up" | "down" | "unknown"; reason?: string | null; retry_in_s?: number | null }>;
+}
+export const getHealth = () => getJson<Health>("api/health");
 /** GET /api/config: `play_all` false hides Play all (hosted copy). */
 export const getConfig = () => getJson<{ play_all?: boolean }>("api/config");
 export const getGallery = () => getJson<GalleryItem[]>("api/gallery");

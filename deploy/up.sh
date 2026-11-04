@@ -82,8 +82,8 @@ curl -sf -m 3 "http://$HOST:$PORT/health" >/dev/null && echo "demo server alread
 ./start_server.sh --bg >/dev/null
 started server
 for _ in $(seq 12); do curl -s -m 3 "http://$HOST:$PORT/" >/dev/null && break; sleep 2; done
-# /health probes every part the way the flow calls it (the routing preview for returns/auto, D3, both Qwen models);
-# allow a few rounds while the Router's models warm up.
+# /health reports the server's background probes (the routing preview for returns/auto, D3, both Qwen models; every
+# 30 s); allow a few rounds while the Router's models warm up.
 health=""
 for _ in $(seq 24); do
   health=$(curl -s -m 60 "http://$HOST:$PORT/health" || true)

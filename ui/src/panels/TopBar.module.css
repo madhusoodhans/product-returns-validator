@@ -57,7 +57,19 @@
   background: color-mix(in oklch, var(--success) 16%, transparent);
 }
 .saving[data-worse] { color: var(--warning); background: color-mix(in oklch, var(--warning) 16%, transparent); }
-.actions { display: flex; align-items: center; }
+.actions { display: flex; align-items: center; gap: var(--space-3); }
+/* Model availability in plain words; the dot carries the tone. */
+.health {
+  display: inline-flex; align-items: center; gap: 7px; max-width: 21rem; padding: 3px 10px; border-radius: 999px;
+  font-size: var(--text-xs); line-height: 1.35; color: var(--text-secondary); background: var(--surface);
+  border: 1px solid var(--border-subtle);
+}
+.healthDot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--text-muted); }
+.health[data-tone="ok"] .healthDot { background: var(--success); }
+.health[data-tone="warn"] { color: var(--warning); border-color: color-mix(in oklch, var(--warning) 40%, transparent); }
+.health[data-tone="warn"] .healthDot { background: var(--warning); }
+.health[data-tone="bad"] { color: var(--danger); border-color: color-mix(in oklch, var(--danger) 45%, transparent); }
+.health[data-tone="bad"] .healthDot { background: var(--danger); }
 
 /* Big screens: the bar has room, so the numbers grow with it. */
 @media (min-width: 1900px) {
@@ -75,6 +87,7 @@
 }
 @media (max-width: 1340px) {
   .bar { gap: var(--space-4); }
+  .health { max-width: 13rem; }
   .long { display: none; }
   .saving { margin-left: 6px; padding: 0 6px; }
   .item[data-wide] { min-width: 0; }

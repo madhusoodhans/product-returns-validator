@@ -21,7 +21,12 @@ BUSY_TEXT = "The service is busy, please try again."
 
 
 class Busy(Exception):
-    """No model capacity for this turn: a slot wait over WAIT_S, a full queue, or 429/503 twice in a row."""
+    """No model capacity for this turn: a slot wait over WAIT_S, a full queue, or 429/503 twice in a row (`code`: the
+    last status then)."""
+
+    def __init__(self, msg, code=None):
+        super().__init__(msg)
+        self.code = code
 
 
 class Gate:
@@ -101,7 +106,7 @@ def post(kind, url, **kw):
         _note_throttled()
         if attempt == 0:
             time.sleep(wait)
-    raise Busy(f"{GATES[kind].name} answered {code} twice")
+    raise Busy(f"{GATES[kind].name} answered {code} twice", code)
 
 
 class Window:

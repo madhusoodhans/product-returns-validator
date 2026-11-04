@@ -3,7 +3,7 @@
  * Missing values render as a dash; a new chat starts from an empty bar. */
 import type { ReactNode } from "react";
 import { ThemeSwitch, type Theme } from "../components/arc/theme-switch/theme-switch";
-import type { Stats } from "../api";
+import type { Health, Stats } from "../api";
 import { DASH, fmtCompact, fmtInt, fmtPct } from "../format";
 import styles from "./TopBar.module.css";
 
@@ -40,7 +40,21 @@ function Compare({ label, pair, fmt, hint, ready }: { label: string; pair: Pair;
   );
 }
 
-export function TopBar({ stats, theme, onTheme }: { stats: Stats | null; theme: Theme; onTheme: (t: Theme) => void }) {
+/** Which models are up, in plain words (GET /api/health): all working, a fallback in use, or unavailable. */
+function HealthBadge({ health }: { health: Health | null }) {
+  const tone = !health ? "unknown" : health.status === "ok" ? "ok" : health.status === "unavailable" ? "bad"
+    : health.status === "checking" ? "unknown" : "warn";
+  const text = health?.message ?? "Status unknown";
+  const down = Object.entries(health?.models ?? {}).filter(([, m]) => m.state === "down").map(([k]) => k);
+  return (
+    <span className={styles.health} data-tone={tone} role="status" aria-live="polite"
+      title={down.length ? `Unavailable right now: ${down.join(", ")}` : "D3, the routing preview and both Qwen models answer"}>
+      <span className={styles.healthDot} aria-hidden="true" />{text}
+    </span>
+  );
+}
+
+export function TopBar({ stats, health, theme, onTheme }: { stats: Stats | null; health: Health | null; theme: Theme; onTheme: (t: Theme) => void }) {
   const s = stats ?? {};
   const share = s.share ?? null;
   const ready = (s.turns ?? 0) > 0;
@@ -78,6 +92,7 @@ export function TopBar({ stats, theme, onTheme }: { stats: Stats | null; theme: 
       </div>
 
       <div className={styles.actions}>
+        <HealthBadge health={health} />
         <ThemeSwitch theme={theme} iconOnly variant="rise" onThemeChange={(next) => onTheme(next)} />
       </div>
     </header>

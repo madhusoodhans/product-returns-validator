@@ -176,8 +176,58 @@ The stored `step` events of a past turn, so clicking an earlier message replays 
   (JPEGs are decoded at reduced scale). The 25 MB body limit is checked before the body is read (413).
 - New verdicts: `busy`, `rate_limited`.
 - `GET /api/config`: `{"play_all": true}` (env `PLAY_ALL`, default 1; 0 hides Play all, as on the hosted Space).
-- `GET /healthz`: `{"ok": true}`, no model calls (liveness). `GET /health` still probes every model, cached 60 s.
+- `GET /healthz`: `{"ok": true}`, no model calls (liveness). `GET /health`: see "Model availability" below.
 - `GET /api/metrics`: `{"active_chats", "chats_in_memory", "busy", "rate_limited", "expired", "turns_last_hour",
   "queued_calls": {"d3", "chat", "preview"}, "throttled_429_503", "memory_mb"}` (counts since start).
 - The server log has one line per turn: `turn <first 8 of chat id> verdict=... ms=... models=... 429s=...` (no
   message text).
+
+## Model availability (2026-11-04)
+- The server tracks four models: `d3` (`/v1/systemone`), `preview` (the Router's routing preview), `qwen9b`, `qwen27b`
+  (`app/availability.py`). A background probe checks each one every `HEALTH_INTERVAL` s (default 30; a one-question D3
+  call, a routing preview, a 1-token chat completion; one at a time, outside the model-call slots). Every real call
+  feeds a circuit breaker: 3 failures in a row (connection error, timeout, 5xx, an unreadable answer, a 503 after the
+  retry) mark the model down for 30 s (`BREAKER_S`), calls to it are then skipped at once; one success marks it up.
+  429s and full slots are capacity (`busy`), not failures. A model that is down is probed again when its 30 s end.
+- Per-call timeouts: D3 10 s, preview 5 s, Qwen 9B 30 s, Qwen 27B 60 s (a streamed reply: the whole stream); env
+  `D3_TIMEOUT_S`, `PREVIEW_TIMEOUT_S`, `QWEN9B_TIMEOUT_S`, `QWEN27B_TIMEOUT_S`.
+- Pre-flight: when D3 is down, a turn answers at once with verdict `unavailable` and the text "The assistant is
+  unavailable right now. Please try again in a minute." (`guardrail` `failed` "D3 unavailable: nothing can be decided
+  without it, no model call", the rest `skipped`; no `done`, no stats, the chat is unchanged).
+- Fallbacks (the LLM only words a decision D3 already made):
+  - routing preview down: the d3-mini guardrail and model choice as before (`guardrail` summary ends "; Router
+    unavailable"). With one LLM down there is nothing to choose, so the D3 model choice is not asked.
+  - Qwen 9B down: Qwen 27B extracts the claim and writes the replies; Qwen 27B down: Qwen 9B. `router` detail then has
+    `fallback` (the model used instead) and `unavailable` (the LLMs that are down), and the summary says e.g. "Normal
+    turn, Qwen 9B; Qwen 9B unavailable, Qwen 27B instead". A call that fails mid-turn moves on to the other LLM in the
+    same turn (not after a timeout: no second wait). `reply` detail then has `fallback_from` and the summary starts
+    "Qwen 9B unavailable, written by Qwen 27B; ...". The `claim` step's `model` is the LLM that extracted it, its
+    detail `extraction` and summary say when it was not Qwen 9B.
+  - both LLMs down: `router` detail `fallback: null` ("language models unavailable: standard reply"); the claim is
+    taken from the order numbers in the text and D3 order matching (no order found: the usual `need_order` question),
+    and the reply is a fixed template per verdict with the order and policy details the flow knows: `reply` step
+    `done`, `model` null, summary "Standard reply: language models unavailable", detail
+    `{"standard": true, "reason": "...", "model": null}`. The same standard reply is used when the D3 reply check is
+    down ("Standard reply: the D3 reply check is unavailable"): unchecked words are not sent.
+- Mid-turn failure of D3 (or anything with no fallback): the running step is `failed` with one plain line ("D3
+  unavailable", "D3 timed out"), the steps not reached are `skipped` ("Not run"), then the `message` with verdict
+  `unavailable` and the text above; no `done`, no stats, and the chat is put back as it was before the turn (send the
+  message again). A bug in the flow: verdict `error`, the failed step says "Something went wrong on our side". No event
+  or API response carries exception text or a model API's answer; the detail is in `logs/server.log` (`models: ...`
+  lines for failures and breaker changes, a traceback for a bug).
+- `GET /api/health` (always 200, for the page) and `GET /health` (200 when every model is up, else 503, for scripts):
+  ```json
+  {"ok": false, "status": "qwen9b_down", "message": "Using Qwen 27B for all replies: Qwen 9B unavailable",
+   "d3": true, "preview": true, "qwen9b": false, "qwen27b": true,
+   "models": {"qwen9b": {"state": "down", "reason": "unavailable", "retry_in_s": 21, "checked_s_ago": 9}, "...": {}},
+   "probe_interval_s": 30}
+  ```
+  `status` / `message`: `ok` "All systems working", `checking` "Checking systems" (before the first probe),
+  `preview_down` "Router preview unavailable: D3 picks the model", `qwen9b_down`, `qwen27b_down` "Using Qwen 9B for
+  all replies: Qwen 27B unavailable", `standard` "Standard replies: language models unavailable", `unavailable`
+  "Assistant unavailable". `state`: `up | down | unknown`. `GET /api/config` also carries this object as `health`.
+- `/api/metrics` adds `unavailable` and `errors` counts. New verdict: `unavailable`. The `error` SSE event is no longer
+  sent.
+- Hosted APIs later: `ROUTER_URL` / `ROUTER_ADMIN_URL` may point anywhere OpenAI-compatible / System One;
+  `ROUTER_API_KEY` (and `ROUTER_ADMIN_API_KEY`, default the same key) are sent as a bearer token, `D3_MODEL` names the
+  D3 model.

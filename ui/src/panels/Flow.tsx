@@ -30,6 +30,12 @@ function RouterView({ d }: { d: RouterDetail }) {
     <div className={styles.router}>
       <p className={styles.routerPick}>{modelName(d.chosen)} <span className={styles.routerWhy}>({hard ? "hard turn" : "normal turn"})</span></p>
       {d.router_decision && <p className={styles.small}>Vela decision <code className={styles.routerName}>{d.router_decision}</code></p>}
+      {"fallback" in d && (
+        <p className={styles.fallback}>
+          <TriangleAlert size={14} strokeWidth={2} aria-hidden="true" />
+          {d.fallback ? `${modelName(d.chosen)} unavailable: ${modelName(d.fallback)} instead` : "Language models unavailable: standard reply"}
+        </p>
+      )}
     </div>
   );
 }
@@ -139,6 +145,7 @@ function GuardView({ d }: { d: GuardrailDetail }) {
 /** Tokens, then the D3 reply check; a replaced reply shows what was caught. */
 function ReplyView({ step, d }: { step: StepEvent; d: ReplyDetail }) {
   const c = d.reply_check;
+  if (d.standard) return d.reason ? <p className={styles.small}>{d.reason}</p> : null;
   const tokens = !step.summary && d.tokens != null ? <p className={styles.small}>{d.tokens} tokens</p> : null;
   if (!c) return tokens;
   return (
@@ -186,6 +193,8 @@ function Node({ node, step, last }: { node: NodeKey; step: StepEvent | undefined
     || (node === "guardrail" && !!(step?.detail as GuardrailDetail | undefined)?.scope_check)
     || (node === "reply" && !!(step?.detail as ReplyDetail | undefined)?.reply_check)));
   const replaced = node === "reply" && !!(step?.detail as ReplyDetail | undefined)?.reply_check?.replaced;
+  // a standard reply (no LLM could word it) gets the same warning border, with its summary
+  const standard = node === "reply" && !!(step?.detail as ReplyDetail | undefined)?.standard;
   const hasQuestions = isD3 && !!(step?.detail as D3Detail | undefined)?.questions?.length && status !== "skipped";
   const [open, setOpen] = useState(true);
   const verdictShown = node === "decision" && !!(step?.detail as DecisionDetail | undefined)?.verdict && step?.status === "done";
@@ -204,7 +213,7 @@ function Node({ node, step, last }: { node: NodeKey; step: StepEvent | undefined
   }, [status, hasQuestions, reduce]);
   const skipped = status === "skipped";
   return (
-    <li ref={ref} className={styles.node} data-status={status} data-last={last || undefined} data-replaced={replaced || undefined}>
+    <li ref={ref} className={styles.node} data-status={status} data-last={last || undefined} data-replaced={replaced || standard || undefined}>
       <span className={styles.rail} aria-hidden="true"><span className={styles.dot} /></span>
       <div className={styles.body}>
         <div className={styles.headRow}>

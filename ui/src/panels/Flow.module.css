@@ -83,6 +83,9 @@
 :root[data-theme="dark"] .matchResult[data-tone="info"] { color: var(--accent); }
 .matchResult[data-tone="bad"] { color: var(--danger); }
 
+/* Router: an LLM is down, the other one (or a standard reply) is used. */
+.fallback { display: flex; align-items: center; gap: 6px; margin-top: 4px; font-size: var(--text-xs); color: color-mix(in oklab, var(--warning) 72%, var(--foreground)); }
+.fallback svg { flex: none; }
 /* Reply check that replaced the worded reply: what was caught. */
 .node[data-replaced] .body { border-color: color-mix(in oklab, var(--warning) 60%, var(--border)); }
 .node[data-replaced][data-status="done"] .summary { color: color-mix(in oklab, var(--warning) 72%, var(--foreground)); }

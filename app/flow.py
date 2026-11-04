@@ -9,14 +9,17 @@ Any new message about the problem re-runs eligibility until the claim is closed,
 eligible claim still counts. A photo is checked whenever it arrives: before the order is known it is kept for later,
 before the claim is clear its result is kept, and it decides the claim once the claim is eligible.
 """
+import copy
 import re
 import time
 
+import availability
 import claim
 import eligibility
 import photo
 import reply
 import turn_checks
+from availability import UNAVAILABLE_TEXT, Unavailable
 from models import BadImage, chat_stream, image_url
 
 NODES = ["guardrail", "router", "claim", "policy", "eligibility", "image_check", "decision", "reply"]
@@ -79,9 +82,49 @@ class Session:
 
     # ------------------------------------------------------------------ one turn
     def turn(self, text=None, image=None, action=None):
+        """One turn's events. A model that fails mid-turn ends the turn with UNAVAILABLE_TEXT and leaves the chat as it
+        was before the turn (the customer can simply send the message again)."""
         if self.ended and not (action == "review" and self.ended["reason"] == "not_covered"):
             yield from self._ended_turn()
             return
+        if not availability.available("d3"):
+            # pre-flight: D3 makes every decision, so nothing can be decided without it; no model call
+            yield from self._unavailable_turn()
+            return
+        snap = self._snapshot()
+        nodes = {}
+        try:
+            for ev in self._turn(text, image, action):
+                if ev["type"] == "step":
+                    nodes[ev["node"]] = ev["status"]
+                yield ev
+        except Unavailable as e:
+            self.__dict__.update(snap)
+            for ev in failed_steps(nodes, e.text):
+                yield ev
+            yield from self._fixed_message(UNAVAILABLE_TEXT, "unavailable")
+        except Exception:
+            self.__dict__.update(snap)   # busy or a bug: the server answers; the chat stays as it was
+            raise
+
+    def _snapshot(self):
+        keep = {id(o): o for o in claim.ORDERS.values()}   # orders are shared data, not chat state
+        return copy.deepcopy(self.__dict__, keep)
+
+    def _fixed_message(self, text, verdict):
+        """A fixed reply without a stored turn (no `done`: no stats, nothing to replay), as for busy."""
+        yield {"type": "token", "text": text}
+        yield {"type": "message", "role": "assistant", "text": text, "verdict": verdict, "order": None,
+               "policy_ref": None, "ended": self.ended}
+
+    def _unavailable_turn(self):
+        for n in NODES:
+            yield {"type": "step", "node": n, "status": "failed" if n == "guardrail" else "skipped",
+                   "summary": "D3 unavailable: nothing can be decided without it, no model call" if n == "guardrail"
+                   else "Not run", "model": None, "ms": None, "detail": None}
+        yield from self._fixed_message(UNAVAILABLE_TEXT, "unavailable")
+
+    def _turn(self, text=None, image=None, action=None):
         force_person = False
         if action == "review":
             # the only thing allowed after "not covered": ask a colleague to review the decision
@@ -131,6 +174,7 @@ class Session:
             sc, sdetail, sms, stok = turn_checks.scope_check(text, prev)
             calls.append(("d3", sms, stok))
             intent = sc["intent"]
+            ctx["complaint"] = sc["complaint"]
             command = sc["command"] >= 0.5
             names_own = any(n in claim.CUSTOMER["orders"] for n in re.findall(r"\b\d{4,6}\b", text))
             sure_normal = sc["scope"] == "returns" and sc["command"] < 0.2 and (
@@ -174,12 +218,28 @@ class Session:
             rdetail = {"chosen": None, "router_decision": pv["decision"], "reason": pv["reason"]}
         elif fixed:  # Router down and nothing for a model to do
             model, rdetail = "qwen9b", {"chosen": None}
+        elif len(availability.llm_order("qwen9b")) < 2:  # Router down and at most one LLM up: nothing to choose
+            model, rdetail = (availability.llm_order("qwen9b") or ["qwen9b"])[0], {"chosen": None}
+            picked = f"{model_name(model)} (Router unavailable)" if availability.llm_order(model) else "Router unavailable"
         else:  # Router down: d3-mini picks
             model, rdetail, rms, rtok = turn_checks.route(text, self.claim.stage.replace("_", " ") if self.claim else "new chat")
             calls.append(("d3", rms, rtok))
             picked = f"{model_name(model)} (Router unavailable, D3 picked)"
         if fixed:
             picked = (f"Vela picked {model_name(pv['model'])}; " if pv and pv["model"] else "") + "not called (fixed reply)"
+        else:
+            # an LLM that is down is not used: the other one words the reply, or a standard reply when both are down
+            use = availability.llm_order(model)
+            if not use:
+                rdetail["fallback"] = None
+                picked += "; language models unavailable: standard reply"
+            elif use[0] != model:
+                rdetail["fallback"] = use[0]
+                picked += f"; {model_name(model)} unavailable, {model_name(use[0])} instead"
+            down = [m for m in ("qwen9b", "qwen27b") if not availability.available(m)]
+            if down:
+                rdetail["unavailable"] = down
+            ctx["llms"] = use
         yield step("router", "skipped" if fixed else "done", picked,
                    "Vela 2.0 (vllm-sr)" if pv else "vllm-sr/d3-mini", pv_ms, rdetail)
 
@@ -213,6 +273,7 @@ class Session:
             nxt = self.queued[0][0]
             ctx["extra_note"] = (f"Then say that next you will look at their other order {nxt} "
                                  f"({claim.ORDERS[nxt]['item']}).")
+            std_note(ctx, f"Next, I will look at your other order {nxt} ({claim.ORDERS[nxt]['item']}).")
         # the chat ends when the customer has an outcome, or after repeated abuse
         self.blocked_n += verdict == "blocked"
         self.off_topic_run = self.off_topic_run + 1 if verdict == "off_topic" else 0
@@ -240,32 +301,55 @@ class Session:
             out = {"text": reply.FIXED[key], "ms": 0, "tokens": 0}
             yield step("reply", "skipped", "Fixed reply, no model call")
         else:
-            yield step("reply", "running", None, model)
-            out = {}
-            for kind, val in chat_stream(model, reply.messages(self.history, verdict, ctx)):
-                if kind == "done":
-                    out = val  # buffered: the reply is checked before the customer sees it
-            calls.append((model, out["ms"], out["tokens"]))
-            rdetail = {"model": model, "tokens": out["tokens"]}
-            summary, ms = f"{out['tokens']} tokens", out["ms"]
-            approved = verdict == "accept" or (c and c.final and c.final[0] == "accept"
-                                               and verdict in ("closed", "info", "human"))
-            if not approved:
-                # D3 reply check: the words must not claim an approval that was not given
-                p, cms, ctok = turn_checks.reply_claims_approval(out["text"])
-                calls.append(("d3", cms, ctok))
-                ms += cms
-                rdetail["reply_check"] = {"model": "vllm-sr/d3-mini", "claims_approval": round(p, 4), "threshold": 0.5,
-                                          "replaced": p >= 0.5, "ms": cms}
-                summary += ", checked by D3"
-                if p >= 0.5:
-                    rdetail["reply_check"]["original"] = out["text"]
-                    key = ctx.get("what") or verdict
-                    out["text"] = reply.FALLBACK.get(key, reply.FALLBACK["need_order"])
-                    if end:
-                        out["text"] = reply.FALLBACK.get(key + "_end", out["text"])
-                    summary = f"Replaced: the reply claimed an approval ({p:.2f})"
-            yield step("reply", "done", summary, model, ms, rdetail)
+            out, used = None, None
+            failed = ctx.setdefault("llm_failed", {})
+            # the turn's model, else the other LLM (router step); not one that already failed in this turn
+            for m in [m for m in ctx.get("llms", [model]) if m not in failed]:
+                yield step("reply", "running", None, m)
+                try:
+                    for kind, val in chat_stream(m, reply.messages(self.history, verdict, ctx)):
+                        if kind == "done":
+                            out, used = val, m  # buffered: the reply is checked before the customer sees it
+                    break
+                except Unavailable as e:
+                    failed[m] = e.text
+                    if e.reason == "timed out":   # do not make the customer wait for a second model as well
+                        break
+            if out is None:
+                yield from self._standard_reply(verdict, ctx, "; ".join(failed.values()), step)
+                out = {"text": reply.standard(verdict, ctx)}
+            else:
+                calls.append((used, out["ms"], out["tokens"]))
+                rdetail = {"model": used, "tokens": out["tokens"]}
+                summary, ms = f"{out['tokens']} tokens", out["ms"]
+                if used != model:
+                    rdetail["fallback_from"] = model
+                    summary = f"{model_name(model)} unavailable, written by {model_name(used)}; " + summary
+                approved = verdict == "accept" or (c and c.final and c.final[0] == "accept"
+                                                   and verdict in ("closed", "info", "human"))
+                if not approved:
+                    # D3 reply check: the words must not claim an approval that was not given
+                    try:
+                        p, cms, ctok = turn_checks.reply_claims_approval(out["text"])
+                    except Unavailable as e:   # unchecked words are not sent: the standard reply instead
+                        yield from self._standard_reply(verdict, ctx, f"reply check: {e.text}", step,
+                                                        "Standard reply: the D3 reply check is unavailable")
+                        out, used = {"text": reply.standard(verdict, ctx)}, None
+                    else:
+                        calls.append(("d3", cms, ctok))
+                        ms += cms
+                        rdetail["reply_check"] = {"model": "vllm-sr/d3-mini", "claims_approval": round(p, 4),
+                                                  "threshold": 0.5, "replaced": p >= 0.5, "ms": cms}
+                        summary += ", checked by D3"
+                        if p >= 0.5:
+                            rdetail["reply_check"]["original"] = out["text"]
+                            key = ctx.get("what") or verdict
+                            out["text"] = reply.FALLBACK.get(key, reply.FALLBACK["need_order"])
+                            if end:
+                                out["text"] = reply.FALLBACK.get(key + "_end", out["text"])
+                            summary = f"Replaced: the reply claimed an approval ({p:.2f})"
+                if used:
+                    yield step("reply", "done", summary, used, ms, rdetail)
         for piece in out["text"].split(" "):
             yield {"type": "token", "text": piece + " "}
         self.history.append({"role": "assistant", "content": out["text"]})
@@ -277,6 +361,11 @@ class Session:
         yield {"type": "done", "turn": tid, "calls": calls,
                "steps": [steps[n] for n in NODES if n in steps],
                "avoided": bool(c and c.final and verdict in ("not_eligible", "human") and not c.photo_checked)}
+
+    def _standard_reply(self, verdict, ctx, why, step, summary="Standard reply: language models unavailable"):
+        """The reply step of a standard (template) reply; the text is reply.standard(verdict, ctx)."""
+        yield step("reply", "done", summary, None, 0,
+                   {"standard": True, "reason": why or "Qwen 9B and Qwen 27B unavailable", "model": None})
 
     def _ended_turn(self):
         """A message to a chat that has ended: nothing runs, nothing changes."""
@@ -294,30 +383,37 @@ class Session:
         yield {"type": "done", "turn": tid, "calls": [], "steps": steps, "avoided": False, "no_turn": True}
 
     # ------------------------------------------------------------------ questions that are not claim steps
-    def _next_step(self):
-        c = self.claim
+    def _next_step(self, std=False):
+        """The claim's next step: an instruction for the LLM, or (std) a sentence for the standard reply."""
+        c, nxt = self.claim, reply.NEXT_STD if std else reply.NEXT
         if not c:
-            return reply.NEXT["need_order"]
+            return nxt["need_order"]
+        item = photo.NOUN.get(c.order["product"], c.order["item"]) if std else c.order["item"]
         if c.final:
-            return reply.NEXT[f"closed_{c.final[0]}"].format(item=c.order["item"])
+            return nxt[f"closed_{c.final[0]}"].format(item=item)
         if c.stage == "clarify":
             q = next((m["content"] for m in reversed(self.history[:-1]) if m["role"] == "assistant"), "")
-            return reply.NEXT["clarify"].format(question=q)
-        return reply.NEXT[c.stage].format(item=c.order["item"])
+            return nxt["clarify"].format(question=q)
+        return nxt[c.stage].format(item=item)
 
     def _answer(self, intent, text, step, skip_rest, calls, ctx):
         """FAQ, policy questions, change of mind, "why?" and small talk: answered from facts, the claim is unchanged."""
         c = self.claim
         yield step("claim", "skipped", f"Not a claim step ({intent.replace('_', ' ')}); claim unchanged")
         yield from skip_rest("claim", "Not needed: a question, the claim is unchanged")
-        ctx["next"] = self._next_step()
-        facts = []
+        ctx["next"], ctx["std_next"] = self._next_step(), self._next_step(std=True)
+        facts, std = [], None   # std: the facts for a standard reply when they differ
+        status = c and c.final and (f"Your {photo.NOUN.get(c.order['product'], 'item')} claim is "
+                                    f"{reply.STATUS_WORDS[c.final[0]]}.")
         if intent == "refund_info":
             facts = [FAQ["label"], FAQ["refund"], FAQ["replacement"]]
+            std = [reply.REFUND_STD]
             if c and c.final:
                 facts.append(f"This claim's status: {c.final[0].replace('_', ' ')}.")
+                std.append(status)
             elif c:
                 facts.append("This claim is not decided yet, so no label has been sent.")
+                std.append("Your claim is not decided yet, so no label has been sent.")
         elif intent == "policy_info":
             named = claim.products_in(text)
             prod = named[0] if named else c and c.order["product"]
@@ -331,10 +427,14 @@ class Session:
                          f"Not covered: {'; '.join(p['not_covered'])}. Photo needed: {p['photo']}"]
             else:
                 facts = ["The return policy depends on the item. Ask which item they mean."]
+                std = ["The return policy depends on the item. Which item do you mean?"]
+                ctx["std_next"] = ""
         elif intent == "change_of_mind":
             facts = [FAQ["other_returns"]]
+            std = [reply.OTHER_RETURNS_STD]
             ctx["extra_note"] = "Name the 'Returns page' in their account, in those words."
             ctx["next"] = reply.NEXT["none"] if not c or c.final else ctx["next"]
+            ctx["std_next"] = reply.NEXT_STD["none"] if not c or c.final else ctx["std_next"]
         elif intent == "why":
             if c and c.photo_log and any(v != "accept" for v, _r in c.photo_log):
                 facts = [f"Photo {i} was not accepted: {', '.join(r).lower() or v.replace('_', ' ')}."
@@ -344,16 +444,22 @@ class Session:
                     facts.append("Tips: " + "; ".join(reply.TIPS[t] for t in tips) + ".")
                 if c.final:
                     facts.append(f"The claim's status: {c.final[0].replace('_', ' ')}.")
+                    std = facts[:-1] + [status]
             elif c and c.last:
                 v, reasons, reason = c.last
                 facts = [f"The last decision was '{v.replace('_', ' ')}' because: {reason or ', '.join(reasons) or 'no reason recorded'}."]
+                std = [f"My last answer was based on this: {(reason or ', '.join(reasons) or 'no reason recorded').rstrip('.')}."]
                 if reasons and v in ("retake", "no_damage", "mismatch"):
                     facts.append("Tips: " + "; ".join(reply.TIPS.get(r, "") for r in reasons if r in reply.TIPS))
+                    std.append(facts[-1] + ".")
             else:
                 facts = ["Nothing has been decided on a claim in this chat yet."]
         else:  # chitchat
             facts = ["The customer is greeting or thanking."]
+            std = ["Happy to help."]
         ctx["facts"] = facts
+        if std is not None:
+            ctx["std_facts"] = std
         ctx["what"] = "info"
         return "info"
 
@@ -367,9 +473,34 @@ class Session:
             ctx["what"] = "human_after_accept"
         elif c and c.final and c.final[0] == "not_eligible":
             ctx["extra_note"] = "A colleague will look at the earlier 'not covered' decision too."
+            std_note(ctx, "They will look at the earlier 'not covered' decision too.")
         return "human" if not (c and c.final and c.final[0] == "human") else "closed"
 
     # ------------------------------------------------------------------ claim, policy, eligibility, photo
+    def _extract(self, text, step, calls, ctx):
+        """Order number and problem from the message: Qwen 9B, else Qwen 27B; with neither, the order numbers in the
+        text (D3 order matching then runs as usual) and D3's scope-check answer on whether it describes a problem.
+        Returns (extracted, ms, model or None, note or None)."""
+        failed = ctx.setdefault("llm_failed", {})   # model -> plain reason, so the reply does not try it again
+        for m in availability.llm_order("qwen9b"):
+            yield step("claim", "running", None, m)
+            try:
+                d, ms, tok = claim.extract(text, m)
+            except Unavailable as e:
+                failed[m] = e.text
+                if e.reason == "timed out":
+                    break
+                continue
+            calls.append((m, ms, tok))
+            note = None if m == "qwen9b" else f"{model_name(m)}: Qwen 9B unavailable"
+            return d, ms, m, note
+        yield step("claim", "running", None, None)
+        known = [n for n in re.findall(r"\b\d{4,6}\b", text) if n in claim.CUSTOMER["orders"]]
+        problem = text if ctx.get("complaint", 0) >= 0.5 else None
+        why = "; ".join(failed.values())
+        return ({"order": known[0] if known else None, "problem": problem}, 0, None,
+                "no language model" + (f": {why}" if why else ""))
+
     def _open(self, order_id):
         """Make order_id the current claim (an existing one, or a new one)."""
         if order_id not in self.claims:
@@ -394,15 +525,15 @@ class Session:
         new_problem = False
         # 3. claim: which order, and is there problem text
         if text:
-            yield step("claim", "running", None, "qwen9b")
-            d, ms, tok = claim.extract(text)
-            calls.append(("qwen9b", ms, tok))
+            d, ms, xm, xnote = yield from self._extract(text, step, calls, ctx)
             named = [n for n in re.findall(r"\b\d{4,6}\b", text)]
             if d.get("order") and d["order"] not in named:
                 named.insert(0, d["order"])
             own = [n for n in dict.fromkeys(named) if n in mine]
             foreign = [n for n in dict.fromkeys(named) if n not in mine]
             detail = {"problem": d.get("problem"), "extracted_order": d.get("order")}
+            if xnote:
+                detail["extraction"] = xnote
             how = ""
             other = None if own else self._other_claim_named(text)
             if own:
@@ -416,6 +547,7 @@ class Session:
                 if own[1:]:
                     ctx["extra_note"] = (f"The customer also mentioned order {', '.join(own[1:])}: say you will look at "
                                          f"that one right after this one.")
+                    std_note(ctx, f"I will look at order {', '.join(own[1:])} right after this one.")
             elif foreign:
                 ctx["not_found"] = foreign[0]
                 ctx["what"] = "not_found"
@@ -460,8 +592,10 @@ class Session:
             summary = (f"Order {c.order['order']}: {c.order['item']}{how}" if c else
                        f"Order {ctx['not_found']} is not on this account" if ctx.get("not_found") else
                        "Which order? " + ctx["options"] if ctx.get("options") else "No order yet")
-            yield step("claim", "done", summary, "qwen9b + vllm-sr/d3-mini" if "order_match" in detail else "qwen9b",
-                       ms, detail)
+            if xnote:
+                summary += f" ({xnote})"
+            models = [m for m in (xm, "vllm-sr/d3-mini" if "order_match" in detail else None) if m]
+            yield step("claim", "done", summary, " + ".join(models) or None, ms, detail)
         else:
             if c and c.final and self.queued:
                 nxt, seed = self.queued[0]
@@ -475,10 +609,12 @@ class Session:
             if img:
                 self.pending_image, self.pending_at = img, time.time()
                 ctx["photo_note"] = "Say their photo is kept and will be checked once we know the order; do not describe it."
+                std_note(ctx, "I have kept your photo and will check it once I know the order.")
             yield from skip_rest("claim", "Waiting for the order")
             return "need_order"
         if ctx.get("what") == "not_found":
             ctx.pop("what")   # a foreign number while a claim is open: mention it, continue with the open claim
+            std_note(ctx, f"Order {ctx['not_found']} is not on your account.")
             ctx["extra_note"] = (ctx.get("extra_note", "") + f" Also say order {ctx.pop('not_found')} is not on their "
                                  "account.").strip()
         if img is None and self.pending_image:
@@ -551,6 +687,7 @@ class Session:
                 # the photo shows the product of another open claim in this chat: judge it for that claim
                 c = self._open(target)
                 ctx["extra_note"] = f"The photo was for their {c.order['item']} claim (order {target})."
+                std_note(ctx, f"I used your photo for the {c.order['item']} claim (order {target}).")
                 if c.policy_ok is None or c.stage in ("need_problem", "clarify"):
                     c.photo = None
                     yield from self._photo(img, step, calls, ctx, early=True)
@@ -565,6 +702,11 @@ class Session:
                     f"The photo they sent cannot be used ({', '.join(reasons)}); mention that a new one will be needed."
                     if v == "retake" else
                     "Their photo was received and will be used once the problem is clear; do not describe it.")
+                std_note(ctx, f"The photo you sent does not show the {c.order['item']} ({', '.join(reasons).lower()})."
+                         if v == "mismatch" else
+                         f"The photo you sent cannot be used ({', '.join(reasons).lower()}), so a new one will be needed."
+                         if v == "retake" else
+                         "I have your photo and will use it once the problem is clear.")
                 ctx["reasons"] = []
                 return c.stage
             c.photo = None
@@ -601,6 +743,21 @@ class Session:
                    "vllm-sr/d3-mini", ms, det)
         ctx["reasons"] = reasons
         return v, reasons
+
+
+def std_note(ctx, text):
+    """A plain sentence for the standard reply (no LLM), next to the instruction the LLM gets."""
+    ctx.setdefault("std_notes", []).append(text)
+
+
+def failed_steps(nodes, reason):
+    """Steps after a model failed mid-turn: the running node (else the first not reached) fails with one plain line,
+    the nodes not reached are skipped."""
+    status = {n: nodes.get(n, "waiting") for n in NODES}
+    failed = {n for n in NODES if status[n] == "running"} or {next((n for n in NODES if status[n] == "waiting"), None)}
+    return [{"type": "step", "node": n, "status": "failed" if n in failed else "skipped",
+             "summary": reason if n in failed else "Not run", "model": None, "ms": None, "detail": None}
+            for n in NODES if status[n] in ("waiting", "running")]
 
 
 def policy_ref(verdict, ctx, c=None):

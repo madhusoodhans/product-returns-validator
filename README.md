@@ -265,12 +265,24 @@ Environment variables of the demo server (`app/server.py`, also honoured by `sta
 | `HOST` | `127.0.0.1` | Address the demo server listens on. Keep it on loopback and use an SSH tunnel. |
 | `PORT` | `8602` | Port of the demo server. |
 | `PLAY_ALL` | `1` | `0` hides the Play all button (the hosted Space sets it). |
+| `HEALTH_INTERVAL` / `BREAKER_S` | 30 / 30 | Seconds between model probes, and how long a model that failed 3 calls in a row is skipped. |
+| `D3_TIMEOUT_S` / `PREVIEW_TIMEOUT_S` / `QWEN9B_TIMEOUT_S` / `QWEN27B_TIMEOUT_S` | 10 / 5 / 30 / 60 | Longest model call (a streamed reply: the whole stream). |
+| `ROUTER_API_KEY` / `ROUTER_ADMIN_API_KEY` / `D3_MODEL` | none / `ROUTER_API_KEY` / `vllm-sr/d3-mini` | Bearer token and D3 model name for hosted APIs; the local Router needs no key. |
 | `MODEL_SLOTS` / `MODEL_WAIT_S` | 12 / 15 | Model calls at once per API (D3, chat, routing preview), and the longest wait for one before the turn answers "busy". |
 | `GPU_USD_PER_HOUR` | 2.59 | Price of one GPU hour for the dollar figures. The default is DigitalOcean's on-demand MI300X GPU Droplet price per GPU (checked 2026-10-26). Set your own cloud's price. |
 
-`GET /health` probes each part the way the flow calls it: the Router, the routing preview for `returns/auto` (it fails
-with a clear message if the recipe is missing), D3 and both Qwen models (cached 60 s). `GET /healthz` is a liveness
-check without model calls; `GET /api/metrics` shows chats, turns in the last hour, queued model calls and 429s.
+`GET /health` says which models are up: D3, the routing preview for `returns/auto` (down when the recipe is missing)
+and both Qwen models, from a background probe every 30 s and from the real calls (3 failures in a row mark a model
+down for 30 s). It is 503 unless all are up; `GET /api/health` is the same with 200, for the page's health badge.
+`GET /healthz` is a liveness check without model calls; `GET /api/metrics` shows chats, turns in the last hour, queued
+model calls and 429s.
+
+**When a model is down.** D3 makes every decision, so without it the chat answers "The assistant is unavailable right
+now. Please try again in a minute." without calling anything. Without Qwen 9B, Qwen 27B writes every reply, and the
+other way round; without both, each decision is worded from a fixed template (the flow says "Standard reply: language
+models unavailable"). Without the routing preview, D3 guards and picks the model. A model that fails mid-turn shows one
+plain line in the flow ("D3 timed out"), the chat is left as it was, and the error detail only goes to
+`logs/server.log`. The top bar says which case applies. Details in [docs/API.md](docs/API.md) ("Model availability").
 
 **Many visitors.** Chats are kept in memory for 30 minutes after their last message (at most 300; a photo waiting for
 an order 10 minutes); a chat the server no longer knows tells the page to start a new one. Each chat may send 10
@@ -290,8 +302,9 @@ policy per product (`data/policies.json`), the facts the bot may quote (`data/fa
 
 ## Troubleshooting
 
-- **`/health` is not ok.** The `false` entry names the part, `detail` says why. `vela_routing` false with "returns/auto
-  is not configured" means the Router runs without this demo's recipe (see the note on one Router per host). Check the
+- **`/health` is not ok.** The `false` entry names the part, `models.<name>.reason` says why in a word, and
+  `logs/server.log` has the detail (`models: ...` lines). `preview` down with "not configured" means the Router runs
+  without this demo's recipe (see the note on one Router per host). Check the
   containers with `docker logs prv-qwen27b` / `docker logs prv-qwen9b`, and the Router with
   `.venv-sr/bin/vllm-sr status` and `.venv-sr/bin/vllm-sr logs` (run them from `deploy/`). The demo server's own log
   is `logs/server.log`.
@@ -313,13 +326,14 @@ With the models up (results of our last runs are in `results/`):
 
 ```bash
 .venv/bin/python tests/test_multiuser.py     # no models: chat eviction and expiry, rate limits, slots, 429 retry
+.venv/bin/python tests/test_availability.py  # no models (stub): pre-flight, breaker, LLM fallbacks, standard replies
 .venv/bin/python bench/run_scenarios.py      # the 16 sample conversations, every turn's verdict (36 turns)
 .venv/bin/python bench/run_regressions.py    # 30 conversations, one per bug found while building and reviewing
 .venv/bin/python bench/probe_scope.py        # 15 injections, 10 off-topic and 8 normal messages through the flow
 ```
 
 Load test without models: `bench/stub_models.py` is a fake Router (D3, chat completions incl. streaming and
-json_schema, routing preview; switches to inject 429s or slow answers); start it, start a demo server with
+json_schema, routing preview; switches to inject 429s or slow answers, and per model: down, slow, 5xx); start it, start a demo server with
 `ROUTER_URL=http://127.0.0.1:8932 ROUTER_ADMIN_URL=http://127.0.0.1:8932 PORT=8632`, then run
 `bench/load_test.py` (50 visitors, 2,000 chats, injected 429s, slow models). Never point it at the real models.
 
@@ -335,6 +349,7 @@ little randomness, so a check on a reply's wording can occasionally miss; run it
 app/                 demo server and claim flow
   server.py          HTTP server: page, SSE stream, per-chat stats, chat lifetime and limits, /health, /api/metrics
   limits.py          model-call slots per API, 429/503 retry, per-chat and per-IP rate limits
+  availability.py    which models are up: background probes, circuit breaker, per-model timeouts, /health
   flow.py            the conversation: one claim per order, every step as an event, chat endings
   turn_checks.py     Vela routing preview (guardrail, 9B/27B), D3 scope check, D3 reply check
   claim.py           Qwen 9B claim extraction, D3 order matching, policy rules

@@ -1,5 +1,6 @@
 """The customer-facing reply. Qwen (9B or 27B, chosen per turn) words the decision; it never makes or changes it."""
 from claim import POLICIES
+from photo import NOUN
 
 SYSTEM = """You are the returns assistant of an online shop, chatting with a customer.
 A separate review system makes every decision. You receive it as DECISION and you must communicate exactly that
@@ -142,3 +143,97 @@ FALLBACK = {
     "closed_not_eligible": "This claim is not covered by the return policy for this item, and that decision stands.",
     "info": "Sorry, I can't answer that here. Is there an order I can help you with?",
 }
+
+
+# Standard replies: when neither Qwen model can answer (both down, or the D3 reply check is), the decision D3 already
+# made is worded from these templates with the order and policy details the flow knows. No model call; they never
+# claim more than the decision.
+STATUS_WORDS = {"accept": "approved", "not_eligible": "not covered", "human": "with a colleague for review"}
+STANDARD = {
+    "need_order": "Which order is this about? Please pick one of your orders above the chat or type its order number.",
+    "which_order": "Which order do you mean: {options}? You can also type the order number.",
+    "need_problem": "What is wrong with the {item} from order {order}?",
+    "clarify_when": "Was the damage already there when the {item} arrived, or did it happen later?",
+    "clarify_what": "Could you tell me what exactly is wrong with the {item}?",
+    "need_photo": "Please send one clear photo of the damage on the {item}. What to photograph: {photo}",
+    "retake": "We could not use that photo ({reasons}). Please send a new photo of the {item}: {tips}.",
+    "mismatch": "That photo does not show the {item} from order {order} ({reasons}). Please send a photo of the {item}. "
+                "What to photograph: {photo}",
+    "no_damage": "We could not see the damage in that photo. Please send a closer photo of the damaged part of the "
+                 "{item}: {tips}.",
+    "accept": "Your return of the {item} is approved. A free return label will be emailed to you within 10 minutes, and "
+              "the replacement or refund follows once the courier collects the item.",
+    "not_eligible": "Sorry, the return of the {item} is not covered: {reason}. {policy}",
+    "human": "A colleague will review your {item} claim{why} and reply by email within one working day.",
+    "human_after_accept": "Your return of the {item} stays approved, and a colleague will also contact you by email "
+                          "within one working day.",
+    "closed_accept": "Your return of the {item} is already approved. The free return label will be emailed to you, and "
+                     "the replacement or refund follows once the courier collects the item.",
+    "closed_human": "A colleague is already reviewing your {item} claim and will reply by email within one working day.",
+    "closed_not_eligible": "Your {item} claim was already decided: it is not covered ({previous}). That decision stands, "
+                           "but a colleague can review it if you would like.",
+}
+NEXT_STD = {
+    "need_order": "Which order can I help you with?",
+    "need_problem": "What is wrong with the {item}?",
+    "clarify": "{question}",
+    "need_photo": "When you are ready, please send one photo of the damage on the {item}.",
+    "closed_accept": "Your return of the {item} is approved.",
+    "closed_human": "A colleague is reviewing your {item} claim.",
+    "closed_not_eligible": "Your {item} claim is not covered.",
+    "none": "How else can I help with your orders?",
+}
+OTHER_RETURNS_STD = ("Returns that are not about damage or a fault (changed mind, wrong size, colour) are started from "
+                     "the Returns page in your account, within the item's return window. This chat only handles damaged "
+                     "or faulty deliveries.")
+
+
+REFUND_STD = ("After approval, a free return label is emailed to you within 10 minutes. The replacement or refund "
+              "follows once the courier collects the item; refunds reach your original payment method within 5 to 7 "
+              "working days. You can choose a replacement or a refund (a replacement depends on stock).")
+
+
+def _lower_first(s):
+    """"A photo cannot ..." -> "a photo cannot ...", but "PII ..." stays."""
+    return s[:1].lower() + s[1:] if s and not (len(s) > 1 and s[1].isupper()) else s
+
+
+def standard(verdict, ctx):
+    """The fixed wording of a decision (no LLM). ctx: the same values reply.messages() gets, plus `std_facts`,
+    `std_next` and `std_notes` (plain sentences for the customer)."""
+    key = ctx.get("what") or ("which_order" if verdict == "need_order" and ctx.get("options") else verdict)
+    pol = POLICIES.get(ctx.get("product") or "", {})
+    reasons = ", ".join(ctx.get("reasons", [])).lower() or "the damage cannot be seen"
+    tips = "; ".join(TIPS[r] for r in ctx.get("reasons", []) if r in TIPS) or TIPS["Damage not visible"]
+    reason = (ctx.get("reason") or ", ".join(ctx.get("reasons", [])) or "").rstrip(".")
+    # the short product name reads better in a sentence than the catalogue title ("smartphone", not "Pixel-style ...")
+    v = {"item": NOUN.get(ctx.get("product") or "", ctx.get("item") or "item"), "order": ctx.get("order") or "", "options": ctx.get("options", ""),
+         "photo": pol.get("photo", "the damaged part, in good light."), "reasons": reasons, "tips": tips,
+         "previous": _lower_first((ctx.get("previous") or "").rstrip(".")) or "see the earlier decision"}
+    if key == "not_found":
+        text = f"I can't find order {ctx.get('not_found', '')} on your account. " + (
+            f"Do you mean {ctx['options']}?" if ctx.get("options") else STANDARD["need_order"])
+    elif key == "info":
+        facts = ctx.get("std_facts") if ctx.get("std_facts") is not None else ctx.get("facts", [])
+        text = " ".join(f for f in facts + [ctx.get("std_next", "")] if f)
+    elif key == "clarify":
+        text = STANDARD["clarify_when" if "arrival" in reason or "when" in reason else "clarify_what"].format(**v)
+    elif key == "not_eligible":
+        ref = ctx.get("policy_ref")
+        policy = (f"The {pol.get('name', 'item').lower()} policy does not cover: "
+                  f"{'; '.join(_lower_first(x) for x in pol.get('not_covered', []))}."
+                  if ref == "not_covered" else f"{ctx.get('policy_line', '')}." if ref == "window" else OTHER_RETURNS_STD)
+        text = STANDARD["not_eligible"].format(reason=_lower_first(reason) or "it is outside the return policy",
+                                               policy=policy, **v)
+    elif key == "human":
+        r = reason.lower()
+        why = ("" if not reason or "asked for a person" in r or "clarifying" in r else
+               " (orders over the review limit are checked by a colleague)" if "review limit" in r else
+               f" ({_lower_first(reason)})")
+        text = STANDARD["human"].format(why=why, **v)
+    else:
+        text = STANDARD.get(key, STANDARD["need_order"]).format(**v)
+    if ctx.get("photo_sent") and key.startswith("closed_"):
+        text += " No more photos are needed for this claim."
+    notes = [n for n in ctx.get("std_notes", []) if n]
+    return " ".join([text] + notes).strip()
