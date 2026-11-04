@@ -18,21 +18,22 @@
   color-scheme: dark;
   position: relative; z-index: 20;
   display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: clamp(20px, 2.4vw, 56px);
-  padding: var(--space-2) clamp(16px, 1.6vw, 24px);
+  padding: var(--space-2) var(--space-4);  /* same gutter as the samples panel, so "All demos" lines up with it */
   background: var(--tb-bg); color: var(--foreground);
 }
 :root[data-theme="dark"] .bar { --tb-bg: oklch(27% .03 262); --surface: oklch(31% .03 262); --surface-muted: oklch(36% .03 262); border-bottom: 1px solid oklch(34% .03 262); }
 
 .brand { display: flex; align-items: center; gap: var(--space-3); min-width: 0; }
-/* "All demos": Arc's ghost button look, as an <a> (the shared :focus-visible ring covers keyboard focus). */
+/* "All demos": bordered like the theme switch, as an <a> (the shared :focus-visible ring covers keyboard focus). */
 .back {
-  flex: none; display: inline-flex; align-items: center; gap: var(--space-2); min-height: var(--control-height-sm);
-  padding-inline: var(--space-3); margin-left: calc(var(--space-3) * -1); border-radius: var(--radius-control);
-  font-size: var(--text-sm); font-weight: 500; white-space: nowrap; text-decoration: none; color: var(--text-secondary);
-  transition: color var(--duration-fast) var(--ease-standard), background var(--duration-fast) var(--ease-standard);
+  flex: none; display: inline-flex; align-items: center; gap: var(--space-2); min-height: var(--control-height-sm); padding: 0 var(--space-3) 0 10px;
+  border: 1px solid var(--border); border-radius: var(--radius-pill); background: var(--surface); color: var(--foreground);
+  font-size: var(--text-sm); font-weight: 500; white-space: nowrap; text-decoration: none; -webkit-tap-highlight-color: transparent;
+  transition: border-color var(--duration-fast) var(--ease-standard), background var(--duration-fast) var(--ease-standard);
 }
-@media (hover: hover) and (pointer: fine) { .back:hover { color: var(--foreground); background: var(--surface-muted); } }
-.back:active { color: var(--foreground); background: var(--surface-muted); }
+.back svg { flex: none; color: var(--text-secondary); }
+@media (hover: hover) and (pointer: fine) { .back:hover { border-color: var(--border-strong); background: var(--surface-muted); } }
+.back:active { background: var(--surface-muted); }
 @media (prefers-reduced-motion: reduce) { .back { transition: none; } }
 .brand h1 { font-size: var(--text-xl); line-height: 1.15; max-width: 11em; text-wrap: balance; }  /* wraps to two lines when the bar is narrow */
 
@@ -92,17 +93,7 @@
 @media (max-width: 1500px) {
   .stats { column-gap: var(--space-3); }
   .item dd { font-size: var(--text-base); }
-  /* "All demos": Arc's ghost button look, as an <a> (the shared :focus-visible ring covers keyboard focus). */
-.back {
-  flex: none; display: inline-flex; align-items: center; gap: var(--space-2); min-height: var(--control-height-sm);
-  padding-inline: var(--space-3); margin-left: calc(var(--space-3) * -1); border-radius: var(--radius-control);
-  font-size: var(--text-sm); font-weight: 500; white-space: nowrap; text-decoration: none; color: var(--text-secondary);
-  transition: color var(--duration-fast) var(--ease-standard), background var(--duration-fast) var(--ease-standard);
-}
-@media (hover: hover) and (pointer: fine) { .back:hover { color: var(--foreground); background: var(--surface-muted); } }
-.back:active { color: var(--foreground); background: var(--surface-muted); }
-@media (prefers-reduced-motion: reduce) { .back { transition: none; } }
-.brand h1 { font-size: var(--text-lg); }
+  .brand h1 { font-size: var(--text-lg); }
   .item[data-wide] { min-width: 9rem; }
 }
 @media (max-width: 1340px) {
@@ -112,5 +103,5 @@
   .saving { margin-left: 6px; padding: 0 6px; }
   .item[data-wide] { min-width: 0; }
   .backText { display: none; }   /* icon only; the aria-label still names it */
-  .back { padding-inline: var(--space-2); margin-left: calc(var(--space-2) * -1); }
+  .back { padding-inline: 9px; }
 }
