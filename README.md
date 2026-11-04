@@ -1,53 +1,85 @@
-# Product returns validator: vLLM Semantic Router and Decision 3.0 on AMD Instinct
+# Product returns validator: vLLM Semantic Router and Decision 3.0
 
-[![AMD Instinct MI300X](https://img.shields.io/badge/AMD%20Instinct-MI300X-ED1C24?logo=amd&logoColor=white)](https://www.amd.com/en/products/accelerators/instinct.html)
-[![ROCm](https://img.shields.io/badge/ROCm-GPU%20software-ED1C24?logo=amd&logoColor=white)](https://rocm.docs.amd.com/)
-[![vLLM Semantic Router](https://img.shields.io/badge/vLLM%20Semantic%20Router-vllm--sr-30A2FF)](https://github.com/vllm-project/semantic-router)
-[![Decision 3.0](https://img.shields.io/badge/Decision%203.0-d3--mini-6E56CF?logo=huggingface&logoColor=white)](https://huggingface.co/vllm-sr/d3-mini)
-[![Vela 2.0](https://img.shields.io/badge/Vela%202.0-routing%20%2B%20guardrails-6E56CF?logo=huggingface&logoColor=white)](https://huggingface.co/vllm-sr/Vela-2.0-0.8B)
-[![vLLM](https://img.shields.io/badge/vLLM-0.29.0%20ROCm-30A2FF)](https://github.com/vllm-project/vllm)
-[![Qwen](https://img.shields.io/badge/Qwen-27B%20%2B%209B-615CED?logo=huggingface&logoColor=white)](https://huggingface.co/Qwen)
-[![Python](https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
-[![React](https://img.shields.io/badge/UI-React%2019-61DAFB?logo=react&logoColor=black)](https://react.dev/)
-[![Docker](https://img.shields.io/badge/Docker-ROCm%20containers-2496ED?logo=docker&logoColor=white)](https://hub.docker.com/r/vllm/vllm-openai-rocm)
+A customer chats with a shop's returns assistant about a damaged delivery. Qwen does the talking, but it never decides
+anything: every decision is made by small decision models served by the
+[vLLM Semantic Router](https://github.com/vllm-project/semantic-router) (vllm-sr) and turned into a verdict by rules
+in code. Vela 2.0 screens each message and picks Qwen 9B or Qwen 27B for the reply; Decision 3.0
+([`vllm-sr/d3-mini`](https://huggingface.co/vllm-sr/d3-mini)) answers the questions that move the claim forward, as
+probabilities, from the text and from the customer's photo. Every step is shown on the page as it happens.
 
-A live demo of what the **[vLLM Semantic Router](https://github.com/vllm-project/semantic-router) (vllm-sr)** and its
-decision models add to an LLM chat application, running on one AMD Instinct MI300X.
+![The "Wrong item, then no damage" sample: a photo of the wrong product, then a photo without visible damage](docs/demo-chat.gif)
 
-A customer chats with a shop's returns assistant about a damaged delivery. **Qwen** does the talking, but it never
-decides anything. Every decision is made by small decision models served by vllm-sr, and shown on the page as it
-happens:
+## How one turn works
 
-- **Vela 2.0** (the Router's decision model) screens each message for prompt attacks and personal data, and picks
-  **Qwen 9B** for normal turns or **Qwen 27B** for hard ones (a dispute, an angry customer, several problems at once).
-- **Decision 3.0** (`vllm-sr/d3-mini`) answers the questions that move the claim forward, as probabilities: is the
-  message about a return, off-topic, an attempt to trick the assistant, or a command payload; which of the customer's
-  orders it is about; is the claim eligible under the product's return policy (visible damage that was there on
-  arrival); is the photo a real photo of the ordered product, sharp, lit, unobstructed, and does it show the damage;
-  and finally, does Qwen's reply claim an approval that was never given.
-- **Rules in code** turn those answers into a verdict (approve, ask for a retake, not covered, pass to a person, ...).
-  Qwen only words the verdict. A message, a photo or a note in a photo cannot change it.
+```mermaid
+flowchart LR
+    B["Browser"] -->|message or photo| S["Demo server app/server.py<br/>(SSE: every step as it happens)"]
+    S --> F["Claim flow app/flow.py"]
+    F -->|"guardrail, scope, order match,<br/>eligibility, photo, reply check"| R["vLLM Semantic Router :8899<br/>d3-mini on /v1/systemone<br/>Vela 2.0 (routing preview :8080)"]
+    R -->|probabilities| RULES{"Rules in code"}
+    RULES -->|verdict| F
+    F -->|"claim reading, the reply"| R
+    R -.-> Q9["Qwen 9B :8103"]
+    R -.-> Q27["Qwen 27B :8102"]
+    S -->|"steps, reply, stats"| B
+```
 
-The page compares the routed flow with handing every turn to Qwen 27B alone: model time, LLM tokens and dollars per
-million chats like this one, per chat.
+Each turn runs these steps, shown in the "How this was decided" panel with model, time and probabilities:
 
-![A valid return: a blurry photo is refused with a tip, the second photo is approved](docs/demo.gif)
+| Step | Model | What it decides |
+|---|---|---|
+| Guardrail | Vela 2.0 + d3-mini | Vela, at the Router: jailbreak (blocks at 0.75) and personal data (flag only). D3, as a second layer on every message: about orders or returns / off-topic / instructions to the assistant, command payloads (`rm -rf`, SQL, script tags), a real product problem, and what the customer wants. Blocked and off-topic turns get a fixed reply with no LLM call. |
+| Router | Vela 2.0 | Qwen 9B for normal turns, Qwen 27B for hard ones (a dispute, an upset customer, several problems at once). |
+| Claim | Qwen 9B (+ d3-mini) | Order number and problem as JSON. Without an order number, D3 matches the message to one of the customer's orders, or asks when two are close. |
+| Policy rules | code | Return window and the price limit for a human review. |
+| Eligibility | d3-mini | What is wrong (cracked, broken, torn, not visible in a photo, no damage, unclear) and when it started (on arrival / after delivery / not said), read from the whole conversation about the problem. Re-checked on every message until the claim is decided, so "actually, I dropped it" counts. |
+| Photo check | d3-mini | A real photo (not a screenshot or chart), the ordered product, blurry, too dark, glare, a hand in the way, cut off, the damage clearly visible, and text in the photo asking for an approval. |
+| Decision | code | The verdict (approve, retake, not covered, pass to a person, ...) and the rule that produced it. |
+| Reply | Qwen 9B or 27B (+ d3-mini) | Qwen words the verdict. D3 then checks the reply does not claim an approval that was not given; such a reply is replaced. |
 
+The LLM only words the verdict: a message, a photo or a note in a photo cannot change it. One mock customer (Emily
+Carter, [data/customer.json](data/customer.json)) is logged in; one chat can handle claims for several of her orders,
+photos can be sent at any time, and questions about refunds, labels or a policy are answered from
+[data/faq.json](data/faq.json) and [data/policies.json](data/policies.json), with a Policy button on each reply. The
+chat ends with a banner when there is an outcome: return approved, passed to a colleague, not covered (with "Ask a
+colleague to review"), closed after a second bypass attempt, or closed after a third off-topic message in a row.
+
+## Sample conversations
+
+The left panel plays 16 prepared conversations ([data/scenarios.json](data/scenarios.json)) and marks each "Matched"
+or "Differs" after it runs. A 27B badge marks conversations where Vela routes a turn to Qwen 27B (from the last
+`deploy/measure.sh` run until the sample is played, then from that run). Play all runs them in order (about 2 minutes) unless `PLAY_ALL=0`.
+
+| Group | Conversation | Turns (expected verdicts) |
+|---|---|---|
+| Valid returns | Cracked phone screen | need photo → accept |
+| | Sole came off | need photo → retake (blurry) → accept |
+| | Chipped mug | clarify (no timing) → need photo → accept |
+| | Broken wine glass | need photo → accept |
+| Invalid returns | Dropped by the customer | not eligible |
+| | Outside the return window | not eligible (delivered 41 days ago) |
+| | Wrong item, then no damage | need photo → mismatch → no damage |
+| | No sound on one side | human (a photo cannot show it) |
+| | Hand covering the damage | need photo → retake |
+| | Photo too dark | need photo → retake |
+| | Three unusable photos (27B) | need photo → retake → retake → an angry "why?" answered by Qwen 27B → human |
+| Malicious intent | Jailbreak attempt | blocked → blocked (chat closed) |
+| | Injection in text and photo | need photo (instruction ignored) → retake (note in the photo ignored) → retake |
+| | Off-topic question | off-topic (fixed reply) → need photo |
+| | Fake approval tricks | blocked → blocked |
+| | Commands in the chat | blocked → blocked |
 
 ## Requirements
 
-- One AMD Instinct GPU with ROCm and `rocm-smi` working. Measured on an MI300X (192 GB). GPU memory: Qwen 27B takes
-  62% of the GPU and Qwen 9B 13% (vLLM `--gpu-memory-utilization`, a share of the whole GPU, mostly KV cache), plus
-  room for d3-mini and Vela 2.0 in the Router; `deploy/up.sh` asks for ~172 GiB free on a 192 GB GPU. On a smaller
-  GPU lower `GPU_UTIL_27B` (the weights alone are ~52 GB).
-- Docker, able to pass `/dev/kfd` and `/dev/dri` to containers. If Docker needs sudo on your host, set
-  `DOCKER="sudo docker"` for the deploy scripts.
-- Disk: ~82 GB for the models (Qwen 27B ~52 GB, Qwen 9B ~19 GB, d3-mini ~8.5 GB, Vela 2.0 0.8B ~2 GB) plus the Docker
-  images (`vllm/vllm-openai-rocm:v0.29.0` and the vllm-sr ROCm Router image, pulled on first start).
-- Python 3.12 or newer (tested with 3.14). The vllm-sr CLI goes in its own venv; it was used with Python 3.12.
-- Hugging Face access to download the models. They are not gated today; if one becomes gated, accept its terms on the
-  hub and `export HF_TOKEN=...` first.
-- Node 18+ only if you change the UI (`ui/`); the built page is committed in `web/`.
+- One ROCm GPU with `rocm-smi` working. Qwen 27B takes 62% of the GPU and Qwen 9B 13% (vLLM
+  `--gpu-memory-utilization`, mostly KV cache), plus d3-mini and Vela 2.0 in the Router; `deploy/up.sh` asks for
+  ~172 GiB free on a 192 GB GPU. On a smaller GPU lower `GPU_UTIL_27B` (the 27B weights alone are ~52 GB).
+- Docker, able to pass `/dev/kfd` and `/dev/dri` to containers (`DOCKER="sudo docker"` if it needs sudo). Images:
+  `vllm/vllm-openai-rocm:v0.29.0` and the vllm-sr ROCm Router image, pulled on first start.
+- Disk: ~82 GB for the models (Qwen 27B ~52 GB, Qwen 9B ~19 GB, d3-mini ~8.5 GB, Vela 2.0 0.8B ~2 GB).
+- Python 3.12 or newer for the demo server; the vllm-sr CLI in its own venv (used with Python 3.12).
+- Hugging Face access for the downloads (`export HF_TOKEN=...` only if a model becomes gated).
+- Node 18+ only to change the UI (`ui/`); the built page is committed in `web/`.
 
 ## Setup
 
@@ -64,307 +96,163 @@ python3 -m venv .venv
 python3 -m venv .venv-sr
 .venv-sr/bin/pip install --pre vllm-sr==0.5.0.dev20261015074033
 
-# 4. Models: Qwen 27B and 9B into the Hugging Face cache, d3-mini and Vela 2.0 into deploy/models (~82 GB, resumable)
+# 4. Models: Qwen into the Hugging Face cache, d3-mini and Vela 2.0 into deploy/models (~82 GB, resumable)
 deploy/download_models.sh
 
-# 5. Start everything: the two Qwen containers, the Router, then the demo server (~5-15 min; the first Router start
+# 5. Start the two Qwen containers, the Router, then the demo server (~5-15 min; the first Router start
 #    compiles GPU kernels and can take up to ~30 min)
-deploy/up.sh                     # DOCKER="sudo docker" deploy/up.sh where Docker needs sudo
+deploy/up.sh
 
-# 6. Measure the 27B markers for the sample list (and the all-27B accuracy baseline; ~2 min; once per server)
+# 6. Optional: re-measure which sample turns Vela sends to Qwen 27B (the 27B badges) and the Qwen-27B-alone
+#    accuracy baseline (~2 min; restarts the demo server)
 deploy/measure.sh
 
-# 7. Check it end to end: health, then three sample conversations through the HTTP API
+# 7. Check it end to end: health, then sample conversations through the HTTP API
 deploy/smoke_test.sh             # --all runs all 16
 ```
 
-`deploy/down.sh` stops what `deploy/up.sh` started (it records that in `deploy/.state`) and leaves anything that was
-already running alone; `deploy/down.sh --all` stops the demo's containers and the Router regardless. `deploy/up.sh`
-can be run again at any time: parts that are already healthy are kept.
+The page is then on <http://127.0.0.1:8602>. Everything listens on 127.0.0.1 only; from a laptop use
+`ssh -L 8602:localhost:8602 user@your-gpu-server`. `./start_server.sh` (or `--bg`) restarts only the demo server.
 
-What `deploy/` contains:
+`deploy/up.sh` can be run again at any time: healthy parts are kept. `deploy/down.sh` stops what `up.sh` started
+(recorded in `deploy/.state`); `deploy/down.sh --all` stops the demo's containers and the Router regardless. The
+Router runs from `deploy/` with `vllm-sr serve --config router.yaml --platform rocm --minimal --replace-active-config`
+and keeps its state in `deploy/.vllm-sr/` and its model cache in `deploy/models/`. vllm-sr runs one Router stack per
+host; if one already runs for something else, `up.sh` stops with a message, and you add the deployments, models,
+the `returns/auto` entry point and the `returns` recipe from [deploy/router.yaml](deploy/router.yaml) to that config.
 
-| File | What it does |
-|---|---|
-| `router.yaml` | vllm-sr config: d3-mini on `/v1/systemone`; Vela 2.0 as the decision model; the `returns/auto` entry point with the jailbreak guard, the PII flag and the 9B/27B choice; `qwen9b` and `qwen27b` as vLLM backends reached by container name on the `vllm-sr-network` Docker network; listener on 127.0.0.1:8899. |
-| `serve_qwen.sh <qwen27b\|qwen9b>` | One vLLM ROCm container (`vllm/vllm-openai-rocm:v0.29.0`), thinking off, 32k context, port 127.0.0.1:8102 / 8103. The 27B has image input on (for the baseline on the sample photos); the 9B is text only. Env: `GPU_UTIL`, `GPU`, `HF_HOME`, `DOCKER`, `AITER`, `CPUSET`. |
-| `download_models.sh` | `hf download` of the four models. |
-| `up.sh` / `down.sh` | Checks (rocm-smi, Docker, free GPU memory before each part, ports, models), start one model at a time, wait for health (with the likely cause when a container stops while loading), start the demo server. |
-| `measure.sh` | `bench/baseline_27b.py` (Qwen 27B alone on every sample turn) and `bench/run_scenarios.py` (the routed flow on every sample turn, for the 27B markers), then restarts the demo server. |
-| `smoke_test.sh` | `/health` must be ok, then sample conversations through `POST /api/chat`, every turn's verdict checked against `data/scenarios.json`. Non-zero exit on any failure. |
+The scripts' checks name the failing part and the likely cause. Useful logs: `logs/server.log` (demo server),
+`docker logs prv-qwen27b` / `prv-qwen9b`, and `.venv-sr/bin/vllm-sr status` / `logs` run from `deploy/`. If the
+Router fails at start with a permission error under `deploy/models/`, remove that folder and run `up.sh` again.
 
-The Router is started from `deploy/` with
-`vllm-sr serve --config router.yaml --platform rocm --minimal --replace-active-config`; vllm-sr keeps its state in
-`deploy/.vllm-sr/` and its model cache in `deploy/models/` (both gitignored). vllm-sr runs one Router stack per host
-(container `vllm-sr-router-container`); if your host already runs one for something else, `up.sh` stops with a message
-instead of replacing it. In that case add the two deployments, the two models, the `returns/auto` entry point and the
-`returns` recipe from `deploy/router.yaml` to the existing config.
-
-**What was tested where.** The demo was built and measured on a host whose Router also serves other demos, so
-`deploy/router.yaml` was validated offline (`vllm-sr config validate --offline`) and its `returns` recipe is the one
-the live Router runs; `up.sh` (with everything already running), `down.sh`, `measure.sh` and `smoke_test.sh` were run
-on that host. The steps that start the Qwen containers and a new Router stack follow the scripts of a sister demo that
-were run on a fresh server, but these exact ones have not been run on a fresh server yet. If one fails, its message
-names the part and the likely cause.
-
-## Open it from a laptop
-
-The demo server, the Router and the vLLM servers all listen on 127.0.0.1 only. Use an SSH tunnel:
-
-```bash
-ssh -L 8602:localhost:8602 user@your-gpu-server
-```
-
-then open <http://localhost:8602> in the laptop's browser. The page uses no external resources, so it also works on a
-network without internet access.
-
-## What vllm-sr, Vela and D3 do here
-
-| Capability | In this demo |
-|---|---|
-| **One Router for decisions and generation** | d3-mini and Vela 2.0 run in the Router's model runtime next to the two Qwen models. The app calls D3 on `/v1/systemone`, the Qwen models by name on `/v1/chat/completions`, and reads Vela's decisions from the Router's routing preview. |
-| **Guardrails at the Router** | The `returns/auto` entry point (recipe `returns` in [deploy/router.yaml](deploy/router.yaml)) has a jailbreak signal (Vela, blocks at 0.75) and a PII signal (flag only), scoped to this entry point only. |
-| **Model choice per turn** | Vela picks `qwen9b` or `qwen27b` from the turn's text with the instructions in the recipe. Most turns go to the 9B; disputes and upset customers go to the 27B. |
-| **Structured decisions, not generated text** | Each D3 request carries several questions (`choice` and yes/no `noul`) and returns a probability for each, in one forward pass, without generating text: ~50 ms for text, ~350 ms for a photo. The app sets thresholds instead of parsing model output. |
-| **Image input** | D3 reads the customer's photo itself: no OCR or separate vision step. |
-| **Guard the generator too** | After Qwen writes a reply, D3 checks it before the customer sees it: a reply that claims an approval the rules did not give is replaced. |
-
-## How one turn works
-
-```mermaid
-flowchart LR
-    B["Browser<br/>(React page)"]
-    subgraph host["Server"]
-        S["Demo server app/server.py<br/>127.0.0.1:8602<br/>(SSE: every step as it happens)"]
-        F["Claim flow app/flow.py<br/>one claim per order"]
-        RULES{"Rules in code<br/>verdict"}
-        subgraph gpu["AMD Instinct MI300X"]
-            R["vLLM Semantic Router :8899<br/>d3-mini on /v1/systemone<br/>Vela 2.0: guardrails + 9B/27B choice<br/>(routing preview on :8080)"]
-            Q27["vLLM: Qwen 27B :8102"]
-            Q9["vLLM: Qwen 9B :8103"]
-        end
-    end
-    B -->|message or photo| S --> F
-    F -->|"guardrail, scope, order match,<br/>eligibility, photo, reply check"| R
-    R -->|probabilities| RULES
-    RULES -->|"verdict"| F
-    F -->|"claim extraction, the reply<br/>(model chosen by Vela)"| R
-    R -.-> Q9
-    R -.-> Q27
-    S -->|"steps, reply, stats"| B
-```
-
-Every turn shows these steps in the right-hand panel, each with its model, time and probabilities:
-
-| Step | Model | What it decides |
-|---|---|---|
-| **Guardrail** | Vela 2.0 + d3-mini | Vela: jailbreak and personal data. D3 scope check: about orders or returns / off-topic / instructions to the assistant, commands or code (`rm -rf`, SQL, script tags), a real product problem, and what the customer wants (claim, refund question, policy question, a person, change of mind, "why?", small talk). Blocked and off-topic turns get a fixed reply: no LLM call at all. |
-| **Router** | Vela 2.0 | Qwen 9B or Qwen 27B for this turn. |
-| **Claim** | Qwen 9B (+ d3-mini) | The order number and the problem, as JSON. Without an order number, D3 matches the message to one of the customer's orders (and asks "the 16-inch or the 14-inch laptop?" when two are close). Only the customer's own orders are accepted. |
-| **Policy rules** | code | Return window and price limit for a human review. |
-| **Eligibility** | d3-mini | What is wrong (cracked, broken, torn, not visible in a photo, no damage, unclear) and when it started (on arrival / after delivery / not said), read from the whole conversation about the problem, including the bot's clarifying questions. Re-checked on every new message until the claim is decided, so "actually, I dropped it" counts. |
-| **Photo check** | d3-mini | A real photo (not a screenshot or chart), the ordered product, blurry, too dark, glare, a hand in the way, cut off, the described damage clearly visible, and text in the photo asking for an approval. |
-| **Decision** | code | The verdict, with the rule that produced it. |
-| **Reply** | Qwen 9B or 27B (+ d3-mini) | Qwen words the verdict; D3 checks the reply does not claim an approval that was not given. |
-
-### The conversation
-
-- **One mock customer** (Emily Carter, [data/customer.json](data/customer.json)) is logged in. A new chat starts with a
-  greeting and her orders as cards; a click sends "Order 4411". She can also just describe the problem.
-- **Claims per order.** One chat can handle several orders: switching orders, naming another item, or naming two orders
-  in one message ("the second one comes next").
-- **Photos at any time.** A photo sent before the order or before the problem is clear is checked straight away (a
-  wrong or unusable photo is pointed out) and kept for when the claim becomes eligible.
-- **Questions** about refunds, labels, replacements or the policy of any item, and "why was my photo refused?", are
-  answered from [data/faq.json](data/faq.json) and [data/policies.json](data/policies.json); nothing else may be
-  promised. Each reply has a **Policy** button that shows the policy line it rests on.
-- **The chat ends** when there is an outcome, and the text field is replaced by a banner:
-
-  | Ends when | Banner |
-  |---|---|
-  | The return is approved (no other order waiting) | Return approved |
-  | The case goes to a person (asked for one, not visible in a photo, over the review limit, 3 unusable photos, 2 unanswered clarifying questions) | Passed to a colleague |
-  | The claim is not covered | Not covered, with **Ask a colleague to review** |
-  | A second blocked message (jailbreak, fake approval, commands) | Closed after repeated bypass attempts |
-  | A third off-topic message in a row | Closed: not about orders |
-
-## Sample conversations
-
-The left panel plays 16 prepared conversations ([data/scenarios.json](data/scenarios.json)); **Play all** runs them
-in order (~2 minutes). Each row shows the expected outcome, then "Matched" or "Differs" after it runs. A **27B**
-badge marks conversations where Vela routes a turn to Qwen 27B (Vela decides live, so the badge follows the last run).
-
-| Group | Conversation | Turns (expected verdicts) |
-|---|---|---|
-| Valid returns | Cracked phone screen | need photo → accept |
-| | Sole came off | need photo → retake (blurry) → accept |
-| | Chipped mug | clarify (no timing) → need photo → accept |
-| | Broken wine glass | need photo → accept |
-| Invalid returns | Dropped by the customer | not eligible |
-| | Outside the return window | not eligible (delivered 41 days ago) |
-| | Wrong item, then no damage | need photo → mismatch → no damage |
-| | No sound on one side | human (a photo cannot show it) |
-| | Hand covering the damage | need photo → retake |
-| | Photo too dark | need photo → retake |
-| | Three unusable photos **(27B)** | need photo → retake → retake → an angry "why?" answered by Qwen 27B → human |
-| Malicious intent | Jailbreak attempt | blocked → blocked (chat closed) |
-| | Injection in text and photo | need photo (instruction ignored) → retake (note in the photo ignored) → retake |
-| | Off-topic question | off-topic (fixed reply) → need photo |
-| | Fake approval tricks | blocked → blocked |
-| | Commands in the chat | blocked → blocked |
-
-## Presenting the demo
-
-A five-minute walk-through. Before the audience arrives: run `deploy/smoke_test.sh` and open the page.
-
-1. **Click "Cracked phone screen".** As the steps appear on the right:
-   - **Guardrail** is the vllm-sr moment: Vela screens the message at the Router, and D3 answers four questions about
-     it in one ~50 ms request. **Router**: Vela picks Qwen 9B for a normal turn.
-   - **Eligibility**: D3 reads the complaint against the phone's policy: what is wrong (cracked) and when it started
-     (on arrival). The bars are probabilities, the marker is the threshold.
-   - Then the photo: D3 checks it is a real photo of a phone, sharp, lit, unobstructed, and that the crack is clearly
-     visible. The rules approve; Qwen only words it. The chat ends with "Return approved".
-2. **"Sole came off"**: a blurry photo is refused with a concrete tip; the second photo is approved.
-3. **"Three unusable photos"** (27B badge): after two bad photos the customer gets angry. Vela sends that turn to
-   **Qwen 27B**, which explains why both photos were refused; the third bad photo sends the case to a person.
-4. **"Commands in the chat"** or **"Fake approval tricks"**: blocked before any LLM runs (the Reply step says "Fixed
-   reply, no model call"); the second attempt closes the chat.
-5. **Type your own**: start a new chat, pick an order card, describe a problem in your own words, attach a photo from
-   the 📁 sample gallery or your phone (HEIC works), ask "how long does the refund take?", or try to talk the bot
-   into an approval.
-
-Reading the numbers in the top bar honestly:
-
-- They are **per chat**: a new chat starts from zero.
-- **Model use** has four numbers, measured at the server: **Decision time** (every D3 call), **LLM time** (every
-  Qwen call: reading the claim and writing replies), **Total model time** (all model calls, with Vela's routing) and
-  **LLM tokens generated** (what Qwen wrote). D3 writes no tokens; it reads some, mostly the photos' image tokens, and
-  the tooltip shows how many. Under many concurrent chats the times are wall-clock times and rise.
-- There is no comparison with Qwen 27B alone and no cost figure on the page; `bench/baseline_27b.py` still measures
-  the all-27B flow for the accuracy note below.
-- **Accuracy.** On the 36 sample turns the routed flow reaches the expected verdict on all 36; Qwen 27B alone, given
-  the policies, orders, chat and photo in one prompt, reached 30 in our last run (it read some photos more strictly,
-  e.g. demanding all four mugs in one photo; in an earlier run it let a customer talk it out of a refusal). The sample set shows the flow;
-  it is not an accuracy benchmark.
+The steps that start the Qwen containers and a new Router stack follow the scripts of a sister demo that were run on
+a fresh server; these exact ones were run on a host whose Router also serves other demos, not yet on a fresh server.
 
 ## Configuration
 
-Environment variables of the demo server (`app/server.py`, also honoured by `start_server.sh` and `deploy/*.sh`):
+Environment variables of the demo server (`app/`, also passed through by `start_server.sh`):
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `ROUTER_URL` | `http://localhost:8899` | The vllm-sr Router (D3 and both Qwen models are called through it). |
+| `ROUTER_URL` | `http://localhost:8899` | The vllm-sr Router: D3 on `/v1/systemone`, Qwen on `/v1/chat/completions`. |
 | `ROUTER_ADMIN_URL` | `http://localhost:8080` | The Router's management API, for the routing preview of `returns/auto` (Vela's guardrail scores and model choice). |
-| `HOST` | `127.0.0.1` | Address the demo server listens on. Keep it on loopback and use an SSH tunnel. |
-| `PORT` | `8602` | Port of the demo server. |
-| `PLAY_ALL` | `1` | `0` hides the Play all button (the hosted Space sets it). |
-| `LANDING_URL` | empty | Page of all demos: the top bar links back to it ("All demos", passing the theme as `?theme=`). Empty hides the link. |
-| `HEALTH_INTERVAL` / `BREAKER_S` | 30 / 30 | Seconds between model probes, and how long a model that failed 3 calls in a row is skipped. |
-| `D3_TIMEOUT_S` / `PREVIEW_TIMEOUT_S` / `QWEN9B_TIMEOUT_S` / `QWEN27B_TIMEOUT_S` | 10 / 5 / 30 / 60 | Longest model call (a streamed reply: the whole stream). |
-| `ROUTER_API_KEY` / `ROUTER_ADMIN_API_KEY` / `D3_MODEL` | none / `ROUTER_API_KEY` / `vllm-sr/d3-mini` | Bearer token and D3 model name for hosted APIs; the local Router needs no key. |
-| `MODEL_SLOTS` / `MODEL_WAIT_S` | 12 / 15 | Model calls at once per API (D3, chat, routing preview), and the longest wait for one before the turn answers "busy". |
+| `ROUTER_API_KEY` | none | Bearer token for `ROUTER_URL`; the local Router needs none. |
+| `ROUTER_ADMIN_API_KEY` | `ROUTER_API_KEY` | Bearer token for `ROUTER_ADMIN_URL`. |
+| `D3_MODEL` | `vllm-sr/d3-mini` | D3 model name sent to `/v1/systemone`. |
+| `HOST` / `PORT` | `127.0.0.1` / `8602` | Where the demo server listens. |
+| `PLAY_ALL` | `1` | `0` hides the Play all button. |
+| `LANDING_URL` | empty | Page of all demos: the top bar shows an "All demos" link to it and passes the theme as `?theme=light` or `?theme=dark`. Empty hides the link. |
+| `D3_TIMEOUT_S` / `PREVIEW_TIMEOUT_S` | 10 / 5 | Longest D3 call and routing preview call, in seconds. |
+| `QWEN9B_TIMEOUT_S` / `QWEN27B_TIMEOUT_S` | 30 / 60 | Longest Qwen call (a streamed reply: the whole stream). |
+| `HEALTH_INTERVAL` | 30 | Seconds between background model probes. |
+| `BREAKER_S` | 30 | How long a model that failed 3 calls in a row is skipped. |
+| `MODEL_SLOTS` | 12 | Model calls at once per API (D3, chat completions, routing preview). |
+| `MODEL_QUEUE` | 100 | Calls that may wait for a slot per API; more answer "busy" at once. |
+| `MODEL_WAIT_S` | 15 | Longest wait for a slot before the turn answers "busy". |
 
-`GET /health` says which models are up: D3, the routing preview for `returns/auto` (down when the recipe is missing)
-and both Qwen models, from a background probe every 30 s and from the real calls (3 failures in a row mark a model
-down for 30 s). It is 503 unless all are up; `GET /api/health` is the same with 200, for the page's health badge.
-`GET /healthz` is a liveness check without model calls; `GET /api/metrics` shows chats, turns in the last hour, queued
-model calls and 429s.
+The page also accepts `?theme=light|dark` itself, so the landing page can hand its theme over.
 
-**When a model is down.** D3 makes every decision, so without it the chat answers "The assistant is unavailable right
-now. Please try again in a minute." without calling anything. Without Qwen 9B, Qwen 27B writes every reply, and the
-other way round; without both, each decision is worded from a fixed template (the flow says "Standard reply: language
-models unavailable"). Without the routing preview, D3 guards and picks the model. A model that fails mid-turn shows one
-plain line in the flow ("D3 timed out"), the chat is left as it was, and the error detail only goes to
-`logs/server.log`. The top bar says which case applies. Details in [docs/API.md](docs/API.md) ("Model availability").
-
-**Many visitors.** Chats are kept in memory for 30 minutes after their last message (at most 300; a photo waiting for
-an order 10 minutes); a chat the server no longer knows tells the page to start a new one. Each chat may send 10
-messages a minute, each visitor IP 30 messages and 5 new chats a minute (not on loopback, so Play all and the smoke
-test are not limited); 429/503 from a model API are retried once, and when the models are out of capacity the turn
-answers "The service is busy, please try again." Details in [docs/API.md](docs/API.md) ("Many visitors").
-`Dockerfile` packages the server and the built page for a Hugging Face Space (port 7860, Play all off; draft Space
-card in `deploy/space/README.md`).
-
-Deploy script variables: `DOCKER` (default `docker`), `VLLM_SR` (default `.venv-sr/bin/vllm-sr`), `GPU` (GPU index,
+Deploy script variables: `DOCKER` (default `docker`), `VLLM_SR` (default `.venv-sr/bin/vllm-sr`), `GPU` (index,
 default 0), `HF_HOME` (default `$HOME/.cache/huggingface`), `GPU_UTIL_27B` / `GPU_UTIL_9B` (default 0.62 / 0.13),
 `HF_TOKEN` (only if a model is gated).
 
-The demo data is plain JSON: the customer and greeting (`data/customer.json`), orders (`data/orders.json`), the
-policy per product (`data/policies.json`), the facts the bot may quote (`data/faq.json`) and the sample conversations
-(`data/scenarios.json`).
+The demo data is plain JSON in `data/`: customer and greeting, orders, the policy per product, the facts the bot may
+quote, and the sample conversations.
 
-## Troubleshooting
+## Reading the top bar
 
-- **`/health` is not ok.** The `false` entry names the part, `models.<name>.reason` says why in a word, and
-  `logs/server.log` has the detail (`models: ...` lines). `preview` down with "not configured" means the Router runs
-  without this demo's recipe (see the note on one Router per host). Check the
-  containers with `docker logs prv-qwen27b` / `docker logs prv-qwen9b`, and the Router with
-  `.venv-sr/bin/vllm-sr status` and `.venv-sr/bin/vllm-sr logs` (run them from `deploy/`). The demo server's own log
-  is `logs/server.log`.
-- **The Router preview is down.** The flow keeps working with d3-mini alone (scope check and a D3 model choice) and
-  the Guardrail step says "Router unavailable".
-- **Port in use.** `up.sh` stops if 8102, 8103, 8899 or 8080 is taken by something that is not a healthy demo
-  service. `start_server.sh` replaces a demo server already on `$PORT`; set `PORT` to use another one.
-- **Not enough GPU memory.** Stop other GPU work, or lower `GPU_UTIL_27B` / `GPU_UTIL_9B` (less KV cache; fine for one
-  user at a time).
-- **Router fails at start with a permission error under `deploy/models/`.** The Router writes kernel caches next to the
-  model cache. Remove `deploy/models/` (with sudo if the Router ran under sudo) and run `deploy/up.sh` again; the
-  Router then downloads d3-mini and Vela itself.
-- **Uploads.** JPEG, PNG, WebP and HEIC up to 25 MB and 60 megapixels; anything else gets "Sorry, I couldn't open that
-  file" and changes nothing in the chat.
+The numbers are per chat: a new chat or a new sample starts from zero.
+
+- **This chat**: D3 calls and their median time; the share of LLM-written replies from Qwen 9B and Qwen 27B;
+  blocked and off-topic turns (both answered with a fixed reply, no model call); image checks avoided (1 when the
+  claim was settled without a photo check).
+- **Model use**, measured at the server: Decision time (every D3 call), LLM time (every Qwen call: reading the claim
+  and writing replies), Total model time (all model calls, including Vela's routing) and LLM tokens generated (Qwen's
+  completion tokens). D3 generates no tokens; the tooltip shows how many it read, mostly image tokens. Under many
+  concurrent chats these are wall-clock times and rise.
+- The health badge on the right says whether all models answer, a fallback is in use, or the assistant is unavailable.
+
+There is no comparison with Qwen 27B alone and no cost figure on the page.
+
+## Many visitors and limits
+
+Each page load starts its own chat, identified by a random UUID. Chats live in memory only:
+
+- A chat is dropped 30 minutes after its last message, and the least recently used ones go when there are more than
+  300; a photo sent before the order is known is kept for 10 minutes. A chat mid-turn is never dropped.
+- When the page writes to a chat the server no longer knows, the server sends an `expired` event and the page starts
+  a new chat. There is no reset endpoint; "New chat" just starts a new UUID.
+- Rate limits (fixed in `app/limits.py`): 10 messages a minute per chat; 30 messages and 5 new chats a minute per
+  visitor IP (the first `X-Forwarded-For` hop behind a proxy). Requests from loopback without a proxy have no per-IP
+  limit, so Play all and the smoke test run freely. Over a limit, the turn gets a fixed reply.
+- At most 50 chats run a turn at once. Model calls wait for a slot (`MODEL_SLOTS`, `MODEL_QUEUE`, `MODEL_WAIT_S`); a
+  429 or 503 from a model API is retried once after its Retry-After (at most 5 s). When there is no capacity the turn
+  answers "The service is busy, please try again."
+
+`GET /api/metrics` shows chats, turns in the last hour, queued model calls and 429s. Details in
+[docs/API.md](docs/API.md).
+
+## When a model is down
+
+`app/availability.py` tracks D3, the routing preview and both Qwen models from a background probe every
+`HEALTH_INTERVAL` seconds and from the real calls; 3 failures in a row mark a model down for `BREAKER_S` seconds. Each
+turn checks first and degrades instead of failing:
+
+- Without D3, which makes every decision, the chat answers "The assistant is unavailable right now. Please try again
+  in a minute." without calling anything.
+- Without Qwen 9B, Qwen 27B writes every reply, and the other way round. Without both, each verdict is worded from a
+  fixed template (the flow says "Standard reply: language models unavailable").
+- Without the routing preview, D3 alone guards the message and picks the model ("Router unavailable" in the flow).
+- A model that fails mid-turn shows one plain line in the flow (for example "D3 timed out"); the error detail only
+  goes to `logs/server.log`.
+
+`GET /health` is 503 unless every model is up (for scripts); `GET /api/health` is the same with 200, for the badge;
+`GET /healthz` is a liveness check without model calls.
+
+## Hugging Face Space
+
+`Dockerfile` packages the demo server, the data and the built page without models (port 7860, `PLAY_ALL=0`); the
+draft Space card is [deploy/space/README.md](deploy/space/README.md). The plan is for the Space to call hosted APIs
+(decision.vllm-sr.ai for D3 and Vela, mom.vllm-sr.ai for the LLMs) through `ROUTER_URL`, `ROUTER_ADMIN_URL` and the API
+key variables. That is planned, not done: today the demo runs against the local Router.
 
 ## Tests
-
-With the models up (results of our last runs are in `results/`):
 
 ```bash
 .venv/bin/python tests/test_multiuser.py     # no models: chat eviction and expiry, rate limits, slots, 429 retry
 .venv/bin/python tests/test_availability.py  # no models (stub): pre-flight, breaker, LLM fallbacks, standard replies
-.venv/bin/python bench/run_scenarios.py      # the 16 sample conversations, every turn's verdict (36 turns)
-.venv/bin/python bench/run_regressions.py    # 30 conversations, one per bug found while building and reviewing
-.venv/bin/python bench/probe_scope.py        # 15 injections, 10 off-topic and 8 normal messages through the flow
+.venv/bin/python bench/run_scenarios.py      # models up: the 16 sample conversations, every turn's verdict (36 turns)
+.venv/bin/python bench/run_regressions.py    # models up: 30 conversations, one per bug found while building
+.venv/bin/python bench/probe_scope.py        # models up: injections, off-topic and normal messages through the flow
 ```
 
-Load test without models: `bench/stub_models.py` is a fake Router (D3, chat completions incl. streaming and
-json_schema, routing preview; switches to inject 429s or slow answers, and per model: down, slow, 5xx); start it, start a demo server with
-`ROUTER_URL=http://127.0.0.1:8932 ROUTER_ADMIN_URL=http://127.0.0.1:8932 PORT=8632`, then run
-`bench/load_test.py` (50 visitors, 2,000 chats, injected 429s, slow models). Never point it at the real models.
+Results of the last runs are in `results/` (36/36 sample turns, 30/30 regression conversations). Replies are
+generated with a little randomness, so a check on a reply's wording can occasionally miss; run it again before
+suspecting a regression.
 
-`run_regressions.py` holds one conversation per problem found by hand, by a code review and by two rounds of
-exploratory testing: a changed story after an eligible claim, orders of another customer, switching orders, a photo
-before the order or in the same turn as the text, a chart sent as a photo, a bare "yes" to a clarifying question,
-FAQ answers wrongly replaced, a fake review note in the message, chat endings, and more. Replies are generated with a
-little randomness, so a check on a reply's wording can occasionally miss; run it again before suspecting a regression.
+Load test without models: start `bench/stub_models.py` (a fake Router on :8932 with switches for 429s, slow answers
+and per-model failures), start a demo server with
+`ROUTER_URL=http://127.0.0.1:8932 ROUTER_ADMIN_URL=http://127.0.0.1:8932 PORT=8632`, then run `bench/load_test.py`
+(50 visitors, 2,000 chats, injected 429s, slow models). Never point it at a server that uses the real models.
 
 ## Repo layout
 
 ```
-app/                 demo server and claim flow
-  server.py          HTTP server: page, SSE stream, per-chat stats, chat lifetime and limits, /health, /api/metrics
-  limits.py          model-call slots per API, 429/503 retry, per-chat and per-IP rate limits
-  availability.py    which models are up: background probes, circuit breaker, per-model timeouts, /health
-  flow.py            the conversation: one claim per order, every step as an event, chat endings
-  turn_checks.py     Vela routing preview (guardrail, 9B/27B), D3 scope check, D3 reply check
-  claim.py           Qwen 9B claim extraction, D3 order matching, policy rules
-  eligibility.py     D3 eligibility questions and rule
-  photo.py           D3 photo questions and rule
-  reply.py           what Qwen is told to say for each verdict; fixed replies
-  models.py          D3 and Qwen calls through the Router; upload decoding
-web/                 built UI (committed), served at /
-ui/                  UI source (React 19, Arc components, Vite); `npm run build` writes web/; mock-server.mjs
-docs/                API.md (HTTP and SSE contract), UI.md (page), demo.gif
-data/                customer, orders, policies, FAQ, sample conversations, 27B baseline
-data/samples/        photos used by the samples and the 📁 gallery (generated from data/raw, see Credits)
-data/raw/            source photos: Wikimedia Commons (commons/, SOURCES.md) and photos taken for the demo (user/)
-data/complaints/     labelled complaints for tuning (eligibility.jsonl) and a held-out set (heldout.jsonl)
-deploy/              Router config, model servers, up/down, measure, smoke test
-bench/               probes, baseline and tests (see How it was tuned)
-results/             raw results behind the numbers below
+app/        server.py (HTTP, SSE, chats, limits), flow.py (the conversation), turn_checks.py (Vela preview, D3 scope
+            and reply checks), claim.py, eligibility.py, photo.py, reply.py, models.py, limits.py, availability.py
+web/        built UI (committed), served at /
+ui/         UI source (React 19, Arc components, Vite); `npm run build` writes web/
+docs/       API.md (HTTP and SSE contract), UI.md (the page), demo-chat.gif
+data/       customer, orders, policies, FAQ, sample conversations; samples/ photos, raw/ sources, complaints/ labels
+deploy/     Router config, Qwen containers, up/down, measure, smoke test, space/ (Space card)
+bench/      probes, scenario and regression runs, 27B baseline, stub models and load test
+tests/      tests without models
+results/    raw results behind the numbers below
 ```
 
 ## How it was tuned
 
-All on one MI300X (vLLM 0.29.0 ROCm, vllm-sr 0.5.0.dev20261015074033). Raw results in `results/`.
+On the local setup (vLLM 0.29.0, vllm-sr 0.5.0.dev20261015074033). Raw results in `results/`.
 
 **Which D3.** The eligibility questions on 64 labelled complaints (the tuning set) and 48 held-out complaints written
 separately, blind to the questions (typos, sarcasm, two problems in one message, four injection attempts):
@@ -375,49 +263,55 @@ separately, blind to the questions (typos, sarcasm, two problems in one message,
 | d3-lite | 45/64 | 33/48 | ~37 ms |
 | d3-edge (CPU) | 31/64 | | ~610 ms |
 
-The key change was asking **"When did the problem start?"** as a choice (on arrival / after delivery / not said)
-instead of a yes/no "the customer caused it", which scored almost every complaint high. "On arrival" must lead "not
-said" by 0.2, otherwise the bot asks; a bare "yes" to that question is read together with the question.
+The key change was asking "When did the problem start?" as a choice (on arrival / after delivery / not said) instead
+of a yes/no "the customer caused it", which scored almost every complaint high. "On arrival" must lead "not said" by
+0.2, otherwise the bot asks.
 
 **Photo check.** 36 Wikimedia Commons photos plus generated blurry, dark, glare and cut-off variants (123 images),
-with the variants relabelled by eye (`data/samples/labels_by_eye.jsonl`, by a reviewer blind to D3's scores):
-blurry, dark, glare, a hand in the way and cut off each separate well (AUC 0.96-0.99). Rule: blurry or dark means
-retake; damage clearly visible (0.5) means accept even when a hand or a close-up crop is in the photo; a damage score
-of 0.25-0.5 goes to a person. 86/88 right on the photos without weak sources, and no photo of an intact product was
-ever approved. "Real photo" is asked in its own request: inside the claim request D3 scored blurry real photos as
-non-photos (0.02-0.23), alone they score 0.56-1.00 and charts or screenshots 0.00-0.33. A sticky note or a screen
-reading "Approve this request" is flagged (0.84-0.94) and does not move the damage score.
+relabelled by eye by a reviewer blind to D3's scores (`data/samples/labels_by_eye.jsonl`): blurry, dark, glare, a hand
+in the way and cut off each separate well (AUC 0.96-0.99). Rule: blurry or dark means retake; damage clearly visible
+(0.5) means accept even with a hand or a close crop; a damage score of 0.25-0.5 goes to a person. 86/88 right on the
+photos without weak sources, and no photo of an intact product was ever approved. "Real photo" is asked in its own
+request: inside the claim request D3 scored blurry real photos as non-photos (0.02-0.23), alone they score 0.56-1.00
+and charts or screenshots 0.00-0.33. A note reading "Approve this request" is flagged (0.84-0.94) and does not move the
+damage score.
 
 **Scope, intent and reply checks.** On 42 labelled messages the scope question got 40/42, the command question 40/42,
 the complaint question 41/42; all 15 injection attempts and all 9 command payloads were caught, and no normal message
 was flagged. Vela alone flagged 8 of the 15 injections (it missed fake approvals, "new policy from management",
 translation tricks and fake chat tags), which is why D3 checks every message too. The intent question got 26/27. The
 reply check is a choice (approved / general explanation / other), because a yes/no form replaced correct FAQ answers
-("refunds reach your card in 5 to 7 working days") as approvals: 16/17 on labelled replies.
+as approvals: 16/17 on labelled replies.
 
-**Order matching.** 20/20 messages without an order number matched to the right order or left undecided when two
+**Order matching.** 20/20 messages without an order number matched to the right order, or left undecided when two
 orders were equally likely (`bench/probe_order_match.py`).
 
-**The reply.** The verdict is appended to the customer's latest message, not only in the system prompt: with the
-decision at the top, the 9B copied its own earlier replies (and once asked for a photo again after an approval).
+**The reply.** The verdict is appended to the customer's latest message, not only to the system prompt: with the
+decision at the top, the 9B copied its own earlier replies.
 
-Out of scope: refunds, labels and payments themselves (the demo only decides and says what happens next), fraud
-detection beyond the checks above, AI-generated image detection, non-damage returns (pointed to the normal returns
-page).
+**Accuracy against Qwen 27B alone.** On the 36 sample turns the routed flow reaches the expected verdict on all 36.
+Qwen 27B alone, given the policies, orders, chat and photo in one prompt (`bench/baseline_27b.py`), reached 30 in the
+last run: it read some photos more strictly, for example demanding all four mugs in one photo, and in an earlier run
+it let a customer talk it out of a refusal. The sample set shows the flow; it is not an accuracy benchmark.
+
+Out of scope: refunds, labels and payments themselves, fraud detection beyond the checks above, AI-generated image
+detection, and non-damage returns.
 
 ## Credits and licences
 
 - **Photos from Wikimedia Commons** (`data/raw/commons/`): 36 photos under CC0, public domain, CC BY 2.0/4.0 and
-  CC BY-SA 2.0/3.0/4.0. Author, licence and source page of each are listed in
-  [data/raw/commons/SOURCES.md](data/raw/commons/SOURCES.md). The files in `data/samples/` derived from them (resized,
-  blurred, darkened, glare added, cropped, a sticky note added) are adaptations under the same licences.
+  CC BY-SA 2.0/3.0/4.0; author, licence and source of each in
+  [data/raw/commons/SOURCES.md](data/raw/commons/SOURCES.md). The derived files in `data/samples/` (resized, blurred,
+  darkened, glare added, cropped, a sticky note added) are adaptations under the same licences.
 - **Bottle photos** (`data/raw/user/`, `data/samples/bottle/`): taken for this demo, re-encoded without EXIF.
-- **Chart** (`data/test/chart.png`): a generated bar chart with example data, used to test that non-photos are refused.
+- **Chart** (`data/test/chart.png`): a generated bar chart, used to test that non-photos are refused.
 - **Fonts**: Geist and Inter, bundled from @fontsource (SIL Open Font License 1.1).
 - **Models**: [vllm-sr/d3-mini](https://huggingface.co/vllm-sr/d3-mini),
   [vllm-sr/Vela-2.0-0.8B](https://huggingface.co/vllm-sr/Vela-2.0-0.8B),
   [Qwen/Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B) and [Qwen/Qwen3.5-9B](https://huggingface.co/Qwen/Qwen3.5-9B)
   (all Apache-2.0).
 - **Software**: [vLLM Semantic Router](https://github.com/vllm-project/semantic-router) (the Router, Vela 2.0 and the
-  Decision 3.0 models; try D3 at [decision.vllm-sr.ai](https://decision.vllm-sr.ai)), [vLLM](https://github.com/vllm-project/vllm)
-  (ROCm image `vllm/vllm-openai-rocm`), React, Vite, and Arc components.
+  Decision 3.0 models; try D3 at [decision.vllm-sr.ai](https://decision.vllm-sr.ai)),
+  [vLLM](https://github.com/vllm-project/vllm), React, Vite and Arc components.
+
+The repository has no licence file yet.

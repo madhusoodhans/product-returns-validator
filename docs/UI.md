@@ -119,5 +119,5 @@ of `ms` of every step that is not skipped. Y adds:
 - `stats.d3_ms_median`, `share`, `model_ms`, `llm_tokens` may be missing or null; the top bar shows a dash.
 - Fonts: Geist (headings) and Inter (text), bundled from @fontsource as on the demos landing page.
 
-README GIF: `docs/demo.gif` ("Sole came off" on the live server). Play all on the live server: 16/16 matched in
+README GIF: `docs/demo-chat.gif` ("Wrong item, then no damage" on the live server, light theme). Play all on the live server: 16/16 matched in
 about 125 s; the banner shows at the end of every sample that ends the chat, and playback goes on to the next sample.
