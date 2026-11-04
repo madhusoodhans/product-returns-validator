@@ -52,9 +52,11 @@
 .caption[data-group="compare"] { grid-column: 6 / 9; }
 .divider { grid-column: 5; grid-row: 1 / 3; width: 1px; background: var(--border); }
 
-.item { grid-row: 2; margin: 0; display: flex; flex-direction: column; min-width: 0; }
+/* No min-width: 0 here: a block never gets narrower than its number, and labels wrap instead (auto tracks give them
+ * their full width when the bar has room). */
+.item { grid-row: 2; margin: 0; display: flex; flex-direction: column; }
 .item[data-wide] { min-width: 10.5rem; }
-.item dt { font-size: var(--text-xs); line-height: 1.3; color: var(--text-secondary); white-space: nowrap; }
+.item dt { font-size: var(--text-xs); line-height: 1.3; color: var(--text-secondary); text-wrap: balance; }
 .item dd {  /* margin-top: auto keeps every number on one line when a label takes two */
   margin: auto 0 0; display: flex; align-items: baseline; font-size: var(--text-lg); font-weight: 500; line-height: 1.3;
   font-variant-numeric: tabular-nums; white-space: nowrap;
@@ -92,8 +94,6 @@
 /* Condense instead of wrapping: smaller values and gaps on laptop widths. */
 @media (max-width: 1500px) {
   .stats { column-gap: var(--space-3); }
-  /* Labels may take two lines here rather than run into the next block. */
-  .item dt { white-space: normal; max-width: 7.5rem; }
   .backText { display: none; }   /* icon only; the aria-label still names it */
   .back { padding-inline: 9px; }
   .item dd { font-size: var(--text-base); }
@@ -105,5 +105,12 @@
   .health { max-width: 13rem; }
   .long { display: none; }
   .saving { margin-left: 6px; padding: 0 6px; }
-  .item[data-wide] { min-width: 0; }
+  .item[data-wide] { min-width: auto; }
 }
+/* Narrower: drop the saving pills, then the routed-vs-27B group, then (phones) the stats row altogether. */
+@media (max-width: 1280px) { .saving { display: none; } }
+@media (max-width: 1150px) {
+  .stats { grid-template-columns: repeat(4, auto); }
+  .caption[data-group="compare"], .divider, .item[data-wide] { display: none; }
+}
+@media (max-width: 760px) { .stats { display: none; } }
