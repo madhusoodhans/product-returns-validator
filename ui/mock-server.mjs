@@ -191,7 +191,6 @@ ${overlays.join("\n")}
 }
 
 // ---------- stats (per chat session, docs/API.md "GET /api/stats?session=<id>") ----------
-const USD_PER_GPU_HOUR = 2;
 const freshStats = () => ({
   turns: 0, d3_calls: 0, d3_ms: [], share: { qwen9b: 0, qwen27b: 0 }, blocked: 0, off_topic: 0, image_checks_avoided: 0,
   model_ms: { routed: 0, baseline_27b: 0 }, tokens: { routed: 0, baseline_27b: 0, d3: 0 },
@@ -207,15 +206,13 @@ function statsPayload(sid) {
     d3_ms_median: sorted.length ? sorted[Math.floor(sorted.length / 2)] : null,
     share: n ? { qwen9b: round2(stats.share.qwen9b / n), qwen27b: round2(stats.share.qwen27b / n) } : null,
     blocked: stats.blocked, off_topic: stats.off_topic, image_checks_avoided: Math.min(1, stats.image_checks_avoided),
-    model_seconds: { routed: 0, baseline_27b: null },
-    tokens: { routed: 0, baseline_27b: null, d3: stats.tokens.d3, note: "LLM tokens only; D3 reads images as tokens too (d3)" },
-    usd_per_million_chats: { routed: null, baseline_27b: null }, gpu_usd_per_hour: USD_PER_GPU_HOUR,
+    model_ms: null, llm_tokens: null, d3_tokens: stats.tokens.d3,
   };
   if (stats.turns) {
-    out.model_seconds = { routed: Math.round(stats.model_ms.routed / 100) / 10, baseline_27b: Math.round(stats.model_ms.baseline_27b / 100) / 10 };
-    out.tokens = { ...out.tokens, routed: stats.tokens.routed, baseline_27b: stats.tokens.baseline_27b };
-    const perChat = (ms) => Math.round((ms / 1000) * (USD_PER_GPU_HOUR / 3600) * 1e6);
-    out.usd_per_million_chats = { routed: perChat(stats.model_ms.routed), baseline_27b: perChat(stats.model_ms.baseline_27b) };
+    // the mock's routed time includes D3; split it so the bar shows decision, LLM and total time
+    const d3 = stats.d3_ms.reduce((a, v) => a + v, 0);
+    out.model_ms = { d3, llm: Math.max(0, stats.model_ms.routed - d3), total: stats.model_ms.routed };
+    out.llm_tokens = stats.tokens.routed;
   }
   return out;
 }
