@@ -4,7 +4,7 @@
 # it model loading. Re-running is safe: parts that are already up and healthy are left alone.
 #
 # Environment (all optional): DOCKER ("sudo docker" where Docker needs sudo), VLLM_SR (vllm-sr CLI path),
-# GPU (GPU index, default 0), HF_HOME, HOST/PORT (demo server, default 127.0.0.1:8602), GPU_USD_PER_HOUR,
+# GPU (GPU index, default 0), HF_HOME, HOST/PORT (demo server, default 127.0.0.1:8602),
 # plus GPU_UTIL_27B / GPU_UTIL_9B (vLLM memory shares, default 0.62 / 0.13).
 set -euo pipefail
 cd "$(dirname "$0")/.."

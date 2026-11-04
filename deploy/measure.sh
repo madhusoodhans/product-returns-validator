@@ -1,6 +1,6 @@
 #!/bin/bash
-# Re-measures this server's numbers for the comparison in the top bar and the "27B" markers. Run once on every new
-# server (and again after changing the GPU, models, vLLM settings or the samples):
+# Re-measures this server's "27B" markers for the sample list and the all-27B accuracy baseline (README, "How it was
+# tuned"). Run once on every new server (and again after changing the GPU, models, vLLM settings or the samples):
 #
 #   bench/baseline_27b.py   Qwen 27B alone runs every sample turn (policies, orders, chat and photo in one prompt)
 #                           -> data/baseline_27b.json (time and tokens per turn, averages for typed-in turns)
