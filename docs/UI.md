@@ -64,7 +64,8 @@ prints the npm deps to install.
   `skipped` with `chosen: null` ("Vela picked no model (guard decision)"). The third unusable photo goes to `human`.
 - `/samples/...` serves the real file under `data/` (placeholder SVG if missing). `GET /api/gallery` lists `data/samples/<product>/`.
 - Stats are per chat session, as in the contract: `stats` events and `GET /api/stats?session=<id>` carry `session`, no `chats`;
-  `tokens.routed` is Qwen only, `tokens.d3` is D3's; `blocked` and `off_topic` are counted apart; `image_checks_avoided` is 0 or 1; `$ per 1M chats` is from this chat's model time.
+  `model_ms` (d3, llm, total) and `llm_tokens` (Qwen completion tokens) feed "Model use"; `d3_tokens` is in its tooltip;
+  `blocked` and `off_topic` are counted apart; `image_checks_avoided` is 0 or 1.
 - (`POST /api/reset` was removed from the real server on 2026-11-04; the mock still has it.)
 - Chat ending (docs/API.md "Chat ending and 27B marker"): every `message` carries `ended` (null while open). Set after
   `accept` (`approved`, "Return approved"), `human` (`handed_over`, "Passed to a colleague"), `not_eligible` (`not_covered`,
@@ -89,7 +90,7 @@ prints the npm deps to install.
 | `src/format.tsx` | Verdict labels, tones and icons (`off_topic`: "Off-topic", info tone, circle-slash; `info`: "Answered", info tone; `bad_file`: "Not a photo file", warning tone; `error`: "Error", danger tone); `verdictMeta` gives an unknown verdict a neutral chip with its own name, so a new server verdict never breaks the page; node names; number formatting |
 | Health badge | `App.tsx` polls `GET /api/health` every 15 s and after every turn; `TopBar` shows `message` as a small pill left of the theme switch (dot green for `ok`, amber for a fallback, red for `unavailable`, grey while checking or when the server does not answer); the tooltip lists the models that are down. `npm run mock` with `MOCK_HEALTH=qwen9b_down|standard|unavailable` shows each state |
 | Model fallbacks in the flow | Router: when the detail has `fallback`, a warning line "Qwen 9B unavailable: Qwen 27B instead" or "Language models unavailable: standard reply" under the pick. Reply: a standard reply (`detail.standard`) gets the warning border, its summary and the reason. Verdict `unavailable`: danger chip "Assistant unavailable" (cloud-off icon) |
-| `src/panels/TopBar.tsx` | Title; one row of stat blocks spread over the bar in two captioned groups, "This chat" (D3 calls + median ms, Qwen 9B / 27B, "Blocked / off-topic" as "2 / 1", Image checks avoided) and "Routed vs all on Qwen 27B" (Model time, LLM tokens with the `tokens.d3` tooltip, $ per 1M chats: routed, vs all-27B, saving pill); condenses below 1500 and 1340 px, grows above 1900 px; theme switch (Arc `theme-switch`) |
+| `src/panels/TopBar.tsx` | Title; one row of stat blocks spread over the bar in two captioned groups, "This chat" (D3 calls + median ms, Qwen 9B / 27B, "Blocked / off-topic" as "2 / 1", Image checks avoided) and "Model use" (Decision time, LLM time, Total model time, LLM tokens generated, each a number and unit); labels wrap rather than overlap, the "Model use" group goes below 1150 px and the stats row on phones; grows above 1900 px; theme switch (Arc `theme-switch`) |
 | `src/panels/Samples.tsx` | The 3 groups from `GET /api/samples` (collapsible, start open); per row title, expected verdict (icon + word) and subtitle, Turn n/N while playing, then Matched (every turn's verdict equals its `expect`) or Differs, with a turn-by-turn tooltip; Play all / Stop (Arc `button`, `scroll-area`); Play all is hidden when `GET /api/config` says `play_all: false` |
 | `src/panels/Policy.tsx` | Policy view (window with "delivered N days ago", covered, not covered, photo, review limit) with the `policy_ref` row highlighted; `OrderChip` ("Order 4411 · Smartphone" + info button) in the chat header and `PolicyButton` under each reply with a `policy_ref` (Arc `popover`, keyboard: Enter opens, Escape closes) |
 | `src/panels/OrderCards.tsx` | "Your orders" under the greeting while the chat has no `message.order` and is not a sample: one button card per order (lucide icon per product, item, "Order 4411 · Delivered 2 days ago", "Outside the 30-day window" when `delivered_days_ago > window_days`), two columns; all 10 before the first user message, then the first 6 with "Show all 10". A click sends the visible user message `Order 4411` through the normal send path |
@@ -115,8 +116,7 @@ of `ms` of every step that is not skipped. Y adds:
 - SSE frames are `data:` lines only (no `event:` names), as the contract describes.
 - Yes/no questions: the borderline band is drawn between `borderline_from` and `threshold` whichever way round they are,
   so questions where "yes" is good (borderline_from above threshold) and "yes" is bad both work. Colour comes from `status`.
-- `stats.d3_ms_median`, `share`, `model_seconds`, `tokens`, `usd_per_million_chats` may be missing or null; the top bar shows a dash.
-  The comparisons show a dash until the chat has a turn and `baseline_27b` is set.
+- `stats.d3_ms_median`, `share`, `model_ms`, `llm_tokens` may be missing or null; the top bar shows a dash.
 - Fonts: Geist (headings) and Inter (text), bundled from @fontsource as on the demos landing page.
 
 README GIF: `docs/demo.gif` ("Sole came off" on the live server). Play all on the live server: 16/16 matched in

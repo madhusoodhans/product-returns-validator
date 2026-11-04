@@ -83,15 +83,14 @@ Stats of ONE chat session (the top bar is per chat; a new chat or a newly played
 `stats` SSE event carries the same object for the session of that request.
 ```json
 {"session": "s-123", "turns": 3, "d3_calls": 2, "d3_ms_median": 290, "share": {"qwen9b": 1.0, "qwen27b": 0.0},
- "blocked": 0, "image_checks_avoided": 0,
- "model_seconds": {"routed": 1.9, "baseline_27b": 3.1},
- "tokens": {"routed": 1300, "baseline_27b": 6800, "d3": 9100, "note": "..."},
- "usd_per_million_chats": {"routed": 1055, "baseline_27b": 1722}, "gpu_usd_per_hour": 2.0,
- "baseline": {"correct": 25, "turns": 30, "measured": "2026-10-26 09:10"}}
+ "llm_turns": 1, "blocked": 0, "off_topic": 0, "image_checks_avoided": 0,
+ "model_ms": {"d3": 580, "llm": 1210, "total": 1795}, "llm_tokens": 156, "d3_tokens": 9100}
 ```
-`baseline_27b` = what Qwen 27B alone took for the same turns (measured per sample turn by bench/baseline_27b.py;
-the per-turn average for free-typed turns). `tokens.routed` counts Qwen tokens only; `tokens.d3` is D3's (mostly
-image) tokens. `image_checks_avoided` is 0 or 1 per chat. There is no `chats` field any more.
+`model_ms` = this chat's model time: every D3 call, every Qwen call, and all model calls (with Vela's routing); null
+before the first turn. `llm_tokens` = completion tokens Qwen wrote (null before the first turn); `d3_tokens` = what D3
+read, mostly image tokens. `image_checks_avoided` is 0 or 1 per chat. There is no `chats` field any more.
+(2026-11-04: `model_seconds`, `tokens`, `usd_per_million_chats`, `gpu_usd_per_hour` and `baseline`, the comparison
+with Qwen 27B alone and the cost figure, were removed. Step `tokens` for Qwen are completion tokens.)
 
 ## GET /api/turn/{turn}
 The stored `step` events of a past turn, so clicking an earlier message replays its flow on the right:
@@ -152,7 +151,7 @@ The stored `step` events of a past turn, so clicking an earlier message replays 
 - Each `escalated` entry carries its own `status` (ok | borderline | bad).
 - `image_check` detail also carries `image` (the path or turn image id D3 judged).
 - ~~POST /api/reset clears sessions and stats~~ (removed 2026-11-04: it wiped every visitor's chat; the UI never used it).
-- Stats `usd_per_million_chats` uses env GPU_USD_PER_HOUR (default 2.59, see README.md).
+- ~~Stats `usd_per_million_chats` uses env GPU_USD_PER_HOUR~~ (removed 2026-11-04 with the cost figure).
 
 ## Many visitors (2026-11-04)
 - `session` must be a UUID (`crypto.randomUUID()`), else 400; there is no shared "default" chat any more.

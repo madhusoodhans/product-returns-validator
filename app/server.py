@@ -44,11 +44,6 @@ UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
 RATE_TEXT = "You are sending messages faster than this demo allows. Please wait a minute and try again."
 EXPIRED_TEXT = "This chat expired, starting a new one."
 ERROR_TEXT = "Sorry, something went wrong on our side. Please send that again."
-# Price of one GPU hour for the $ figures: DigitalOcean's on-demand MI300X GPU Droplet price per GPU (checked
-# 2026-10-26). Set your own cloud's price.
-GPU_USD_PER_HOUR = float(os.environ.get("GPU_USD_PER_HOUR", "2.59"))
-BASELINE = (json.loads((ROOT / "data/baseline_27b.json").read_text())
-            if (ROOT / "data/baseline_27b.json").exists() else None)
 # which LLM answered each sample turn in the last bench/run_scenarios.py run (Vela's choice), for the "27B" marker
 MODELS = (json.loads((ROOT / "data/scenario_models.json").read_text())
           if (ROOT / "data/scenario_models.json").exists() else {})
@@ -58,9 +53,8 @@ CASES = ["note_screen", "cut_off", "clear", "blurry", "dark", "glare", "intact",
 class SessionStats:
     """Stats of one chat (the top bar is per chat: a new chat or a new sample starts from zero)."""
     def __init__(self):
-        self.calls = []            # (kind, ms, tokens) of every model call
+        self.calls = []            # (kind, ms, tokens) of every model call; tokens = completion tokens for Qwen
         self.reply_models = []     # model per turn
-        self.baseline = []         # (seconds, tokens) of the all-27B run for each turn
         self.blocked = 0
         self.off_topic = 0
         self.avoided = 0           # claims closed before any photo check
@@ -69,38 +63,17 @@ class SessionStats:
         d3 = [ms for k, ms, _ in self.calls if k == "d3"]
         n = len(self.reply_models)
         llm = [m for m in self.reply_models if m]
-        seconds = sum(ms for _k, ms, _t in self.calls) / 1000
-        llm_tokens = sum(t for k, _ms, t in self.calls if k.startswith("qwen"))
-        d3_tokens = sum(t for k, _ms, t in self.calls if k == "d3")
-        b_seconds = sum(x for x, _ in self.baseline) if n else None
-        b_tokens = sum(t for _, t in self.baseline) if n else None
-        usd = lambda secs: round(secs / 3600 * GPU_USD_PER_HOUR * 1e6) if secs else None
+        llm_ms = sum(ms for k, ms, _t in self.calls if k.startswith("qwen"))
         return {"turns": n, "d3_calls": len(d3), "d3_ms_median": round(statistics.median(d3)) if d3 else None,
                 # share of the turns where an LLM actually wrote the reply
                 "share": {m: round(llm.count(m) / len(llm), 3) for m in ("qwen9b", "qwen27b")} if llm else None,
                 "llm_turns": len(llm),
                 "blocked": self.blocked, "off_topic": self.off_topic, "image_checks_avoided": self.avoided,
-                "model_seconds": {"routed": round(seconds, 2), "baseline_27b": round(b_seconds, 2) if n else None},
-                "tokens": {"routed": llm_tokens, "baseline_27b": b_tokens, "d3": d3_tokens,
-                           "note": "LLM tokens only; D3 reads images as tokens too (d3)"},
-                "usd_per_million_chats": {"routed": usd(seconds), "baseline_27b": usd(b_seconds)},
-                "gpu_usd_per_hour": GPU_USD_PER_HOUR,
-                "baseline": BASELINE and {"correct": BASELINE["correct"], "turns": BASELINE["turns"],
-                                          "measured": BASELINE["measured"]}}
-
-
-def baseline_turn(text, image):
-    """All-27B time and tokens for this turn: the measured value when it is a sample turn, else the measured average
-    for that kind of turn (text only, or with a photo)."""
-    if not BASELINE:
-        return 0.0, 0
-    hit = BASELINE.get("by_input", {}).get(image if image and not image.startswith("data:") else text or "")
-    if hit and not (image and text and image.startswith("data:")):
-        return hit["ms"] / 1000, hit["tokens"]
-    a = BASELINE.get("avg", {}).get("image" if image else "text")
-    if a:
-        return a["ms"] / 1000, a["tokens"]
-    return BASELINE["seconds"] / BASELINE["turns"], round(BASELINE["tokens"] / BASELINE["turns"])
+                # this chat's model time in ms: every D3 call, every Qwen call, and all model calls (with Vela's routing)
+                "model_ms": {"d3": round(sum(d3), 1), "llm": round(llm_ms, 1),
+                             "total": round(sum(ms for _k, ms, _t in self.calls), 1)} if n else None,
+                "llm_tokens": sum(t for k, _ms, t in self.calls if k.startswith("qwen")) if n else None,
+                "d3_tokens": sum(t for k, _ms, t in self.calls if k == "d3")}
 
 
 class Chat:
@@ -171,7 +144,6 @@ class State:
             st.calls += done["calls"]
             # the model that wrote the reply; None when the turn got a fixed reply (blocked, off-topic): no LLM ran
             st.reply_models.append(next((k for k, _ms, _t in reversed(done["calls"]) if k.startswith("qwen")), None))
-            st.baseline.append(baseline_turn(text, image))
             st.blocked += verdict == "blocked"
             st.off_topic += verdict == "off_topic"
             st.avoided += bool(done.get("avoided"))

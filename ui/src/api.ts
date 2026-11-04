@@ -80,9 +80,11 @@ export interface Stats {
   session?: string; turns?: number; d3_calls?: number; d3_ms_median?: number | null;
   share?: { qwen9b?: number; qwen27b?: number } | null;
   blocked?: number; off_topic?: number; image_checks_avoided?: number;
-  model_seconds?: { routed: number | null; baseline_27b: number | null };
-  tokens?: { routed: number | null; baseline_27b: number | null; d3?: number; note?: string };
-  usd_per_million_chats?: { routed: number | null; baseline_27b: number | null };
+  /** This chat's model time in ms; null before its first turn. */
+  model_ms?: { d3: number; llm: number; total: number } | null;
+  /** Completion tokens Qwen wrote in this chat; null before its first turn. */
+  llm_tokens?: number | null;
+  d3_tokens?: number;
 }
 
 export type ChatEvent =

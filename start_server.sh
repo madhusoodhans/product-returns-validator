@@ -2,7 +2,7 @@
 # Starts (or restarts) the demo server on $HOST:$PORT (default 127.0.0.1:8602).
 #   ./start_server.sh        in the foreground
 #   ./start_server.sh --bg   in the background, log in logs/server.log
-# Environment: HOST, PORT, ROUTER_URL, ROUTER_ADMIN_URL, GPU_USD_PER_HOUR, PLAY_ALL, LANDING_URL, MODEL_SLOTS
+# Environment: HOST, PORT, ROUTER_URL, ROUTER_ADMIN_URL, PLAY_ALL, LANDING_URL, MODEL_SLOTS
 # (see README.md), PYTHON (default .venv/bin/python).
 cd "$(dirname "$0")"
 PY="${PYTHON:-.venv/bin/python}"

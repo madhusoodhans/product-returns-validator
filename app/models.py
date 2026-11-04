@@ -103,11 +103,13 @@ def chat(model, messages, max_tokens=300, schema=None, timeout=None):
             r.raise_for_status()
             out = r.json()
         text = out["choices"][0]["message"]["content"].strip()
-    return text, round((time.perf_counter() - t) * 1000, 1), (out.get("usage") or {}).get("total_tokens") or 0
+    # tokens = what the model wrote (completion tokens), the figure the top bar sums as "LLM tokens generated"
+    return text, round((time.perf_counter() - t) * 1000, 1), (out.get("usage") or {}).get("completion_tokens") or 0
 
 
 def chat_stream(model, messages, max_tokens=300, timeout=None):
-    """Streaming call. Yields ("token", text) and finally ("done", {"ms", "tokens", "text"}). The whole stream must
+    """Streaming call. Yields ("token", text) and finally ("done", {"ms", "tokens", "text"}), tokens being the completion
+    tokens. The whole stream must
     finish within the model's timeout. Raises availability.Unavailable."""
     body = {"model": model, "messages": messages, "max_tokens": max_tokens, "temperature": 0.3, "stream": True,
             "stream_options": {"include_usage": True}, "chat_template_kwargs": {"enable_thinking": False}}
@@ -128,7 +130,7 @@ def chat_stream(model, messages, max_tokens=300, timeout=None):
                     break
                 chunk = json.loads(data)
                 if chunk.get("usage"):
-                    tokens = chunk["usage"].get("total_tokens") or tokens
+                    tokens = chunk["usage"].get("completion_tokens") or tokens
                 for c in chunk.get("choices") or []:
                     piece = (c.get("delta") or {}).get("content")
                     if piece:

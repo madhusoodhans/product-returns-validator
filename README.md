@@ -71,7 +71,7 @@ deploy/download_models.sh
 #    compiles GPU kernels and can take up to ~30 min)
 deploy/up.sh                     # DOCKER="sudo docker" deploy/up.sh where Docker needs sudo
 
-# 6. Measure this server's Qwen 27B baseline and 27B markers for the page (~2 min; once per server)
+# 6. Measure the 27B markers for the sample list (and the all-27B accuracy baseline; ~2 min; once per server)
 deploy/measure.sh
 
 # 7. Check it end to end: health, then three sample conversations through the HTTP API
@@ -236,19 +236,12 @@ A five-minute walk-through. Before the audience arrives: run `deploy/smoke_test.
 Reading the numbers in the top bar honestly:
 
 - They are **per chat**: a new chat starts from zero.
-- **Model time** is the sum of every model call of the chat (Router preview, D3, Qwen), measured at the server, one
-  chat at a time. The **all-27B** side is Qwen 27B alone on the same turns, measured by `bench/baseline_27b.py` on
-  the sample turns (and the measured per-turn average, separately for text and photo turns, for anything typed in).
-  Under many concurrent chats, routed model time is wall-clock time and rises, while the baseline does not.
-- **LLM tokens** count what the Qwen models read and wrote. D3 also reads tokens, mostly image tokens of the photos;
-  the tooltip shows them. Counting D3's tokens, the routed flow reads more tokens than Qwen 27B alone: D3 is a much
-  smaller model that answers in one forward pass without generating text.
-- **$ per million chats** is the chat's model time times one million, priced at a cloud on-demand GPU hour
-  (`GPU_USD_PER_HOUR`). Measured one request at a time, it is an upper bound; read it mainly as the ratio between the
-  two flows.
-- **The saving depends on the chat.** Blocked and off-topic turns cost one D3 call and no LLM (e.g. 0.3 s against
-  1.5 s); an approved return with two photos saves less (e.g. 2.4 s against 2.8 s); a chat with a 27B turn sits in
-  between (e.g. 3.9 s against 5.3 s). All on our MI300X.
+- **Model use** has four numbers, measured at the server: **Decision time** (every D3 call), **LLM time** (every
+  Qwen call: reading the claim and writing replies), **Total model time** (all model calls, with Vela's routing) and
+  **LLM tokens generated** (what Qwen wrote). D3 writes no tokens; it reads some, mostly the photos' image tokens, and
+  the tooltip shows how many. Under many concurrent chats the times are wall-clock times and rise.
+- There is no comparison with Qwen 27B alone and no cost figure on the page; `bench/baseline_27b.py` still measures
+  the all-27B flow for the accuracy note below.
 - **Accuracy.** On the 36 sample turns the routed flow reaches the expected verdict on all 36; Qwen 27B alone, given
   the policies, orders, chat and photo in one prompt, reached 30 in our last run (it read some photos more strictly,
   e.g. demanding all four mugs in one photo; in an earlier run it let a customer talk it out of a refusal). The sample set shows the flow;
@@ -270,7 +263,6 @@ Environment variables of the demo server (`app/server.py`, also honoured by `sta
 | `D3_TIMEOUT_S` / `PREVIEW_TIMEOUT_S` / `QWEN9B_TIMEOUT_S` / `QWEN27B_TIMEOUT_S` | 10 / 5 / 30 / 60 | Longest model call (a streamed reply: the whole stream). |
 | `ROUTER_API_KEY` / `ROUTER_ADMIN_API_KEY` / `D3_MODEL` | none / `ROUTER_API_KEY` / `vllm-sr/d3-mini` | Bearer token and D3 model name for hosted APIs; the local Router needs no key. |
 | `MODEL_SLOTS` / `MODEL_WAIT_S` | 12 / 15 | Model calls at once per API (D3, chat, routing preview), and the longest wait for one before the turn answers "busy". |
-| `GPU_USD_PER_HOUR` | 2.59 | Price of one GPU hour for the dollar figures. The default is DigitalOcean's on-demand MI300X GPU Droplet price per GPU (checked 2026-10-26). Set your own cloud's price. |
 
 `GET /health` says which models are up: D3, the routing preview for `returns/auto` (down when the recipe is missing)
 and both Qwen models, from a background probe every 30 s and from the real calls (3 failures in a row mark a model
