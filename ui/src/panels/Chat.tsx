@@ -15,7 +15,7 @@ import { motionTokens } from "../components/arc/lib/motion-tokens";
 import { imageUrl, type CustomerOrder, type Ended, type OrderInfo, type Policies } from "../api";
 import { OrderCards } from "./OrderCards";
 import { OrderChip, PolicyButton } from "./Policy";
-import { verdictMeta } from "../format";
+import { ROUTER_NOTE, reasoningWords, routeTag, routedName, verdictMeta } from "../format";
 import type { Msg, Playing } from "../useDemo";
 import styles from "./Chat.module.css";
 
@@ -105,6 +105,12 @@ function Bubble({ m, selected, live, canOpen, onOpen, policies }: {
         <div className={styles.meta}>
           <Badge tone={v.tone} size="sm" icon={<Icon size={12} strokeWidth={2} aria-hidden="true" />} className={styles.chip}>{v.label}</Badge>
           {m.policyRef && m.order && policies[m.order.product] && <PolicyButton policy={policies[m.order.product]} order={m.order} highlight={m.policyRef} />}
+          {m.route && (m.route.decision || m.route.reasoning) && (
+            <span className={styles.route} data-reasoning={m.route.reasoning === "on" || undefined}
+              title={`vllm-sr/auto: ${m.route.decision || "routed"} decision, ${reasoningWords(m.route)}${m.route.model ? `, ${routedName(m.route.model)}` : ""}. ${ROUTER_NOTE}`}>
+              {routeTag(m.route)}
+            </span>
+          )}
         </div>
       )}
     </motion.li>

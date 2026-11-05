@@ -8,7 +8,7 @@ import { ScrollArea } from "../components/arc/scroll-area/scroll-area";
 import { motionTokens } from "../components/arc/lib/motion-tokens";
 import type { Group, Scenario } from "../api";
 import { verdictMeta } from "../format";
-import { matches, type Outcomes, type Playing, type Used27 } from "../useDemo";
+import { matches, type Outcomes, type Playing, type UsedReasoning } from "../useDemo";
 import styles from "./Samples.module.css";
 
 function ExpectedIcon({ expected }: { expected: string }) {
@@ -27,10 +27,10 @@ function diffText(sc: Scenario, got: Outcomes[string]) {
   }).join("\n");
 }
 
-export function Samples({ groups, error, playing, outcomes, used27, playAll, onPlay, onPlayAll, onStop }: {
+export function Samples({ groups, error, playing, outcomes, usedReasoning, playAll, onPlay, onPlayAll, onStop }: {
   groups: Group[]; error: string | null; playing: Playing | null; outcomes: Outcomes;
-  /** What the last run of each scenario did; before a run the badge follows `uses_27b` from the bench. */
-  used27: Used27;
+  /** What the last run of each scenario did; before a run the badge follows `uses_reasoning` from the bench. */
+  usedReasoning: UsedReasoning;
   /** Show Play all (off on the hosted copy: GET /api/config). */
   playAll: boolean;
   onPlay: (group: string, sc: Scenario) => void; onPlayAll: () => void; onStop: () => void;
@@ -69,18 +69,18 @@ export function Samples({ groups, error, playing, outcomes, used27, playAll, onP
                         const got = outcomes[sc.id];
                         const ok = got ? matches(sc, got) : null;
                         const exp = verdictMeta(sc.expected);
-                        const ran = Object.prototype.hasOwnProperty.call(used27, sc.id);
-                        const big = ran ? used27[sc.id] : !!sc.uses_27b;
+                        const ran = Object.prototype.hasOwnProperty.call(usedReasoning, sc.id);
+                        const thinks = ran ? usedReasoning[sc.id] : !!sc.uses_reasoning;
                         return (
                           <li key={sc.id}>
                             <button type="button" className={styles.scenario} data-active={active || undefined} aria-current={active ? "true" : undefined}
                               onClick={() => onPlay(g.key, sc)} title={got ? diffText(sc, got) : sc.turns.map((t) => t.text ?? `[photo] ${t.image ?? ""}`).join("\n")}
-                              aria-label={`${sc.title}. ${sc.subtitle ?? ""}. Expected: ${exp?.label ?? sc.expected}${big ? ". Uses Qwen 27B" : ""}${ok == null ? "" : ok ? ". Matched" : ". Differs"}`}>
+                              aria-label={`${sc.title}. ${sc.subtitle ?? ""}. Expected: ${exp?.label ?? sc.expected}${thinks ? ". Router switches reasoning on" : ""}${ok == null ? "" : ok ? ". Matched" : ". Differs"}`}>
                               <ExpectedIcon expected={sc.expected} />
                               <span className={styles.scText}>
                                 <span className={styles.scLine}>
                                   <span className={styles.scTitle}>{sc.title}</span>
-                                  {big && <span className={styles.b27} title={ran ? "Vela routed a turn of this run to Qwen 27B" : "Vela routes a turn of this chat to Qwen 27B"}>27B</span>}
+                                  {thinks && <span className={styles.reasoning} title={ran ? "The Router switched reasoning on for a reply of this run" : "The Router switches reasoning on for a reply of this chat"}>Reasoning</span>}
                                   {active ? <span className={styles.live}>{`Turn ${playing!.turn + 1}/${sc.turns.length}`}</span>
                                     : ok != null && <span className={styles.result} data-ok={ok}>{ok ? "Matched" : "Differs"}</span>}
                                 </span>

@@ -6,7 +6,7 @@ import type { ReactNode } from "react";
 import { ArrowLeft } from "lucide-react";
 import { ThemeSwitch, type Theme } from "../components/arc/theme-switch/theme-switch";
 import type { Health, Stats } from "../api";
-import { DASH, fmtInt, fmtPct } from "../format";
+import { DASH, fmtInt } from "../format";
 import styles from "./TopBar.module.css";
 
 function Stat({ label, hint, wide, children }: { label: string; hint?: string; wide?: boolean; children: ReactNode }) {
@@ -24,15 +24,22 @@ function Dur({ ms }: { ms: number | null | undefined }) {
   return ms < 1000 ? <>{Math.round(ms)}<span className={styles.unit}>ms</span></> : <>{(ms / 1000).toFixed(ms < 10000 ? 2 : 1)}<span className={styles.unit}>s</span></>;
 }
 
-/** Which models are up, in plain words (GET /api/health): all working, a fallback in use, or unavailable. */
+const HEALTH_MODEL: Record<string, string> = { d3: "D3 flash", guard: "Vela 3 flash", llm: "vllm-sr/auto (language model)" };
+
+/** Which models are up, in plain words (GET /api/health): all working, D3 checking alone, standard replies, or unavailable. */
+const HEALTH_TEXT: Record<string, string> = {
+  ok: "All systems working", checking: "Checking systems", guard_down: "Vela guardrail unavailable: D3 checks messages alone",
+  standard: "Standard replies: language model unavailable", unavailable: "Assistant unavailable",
+};
+
 function HealthBadge({ health }: { health: Health | null }) {
   const tone = !health ? "unknown" : health.status === "ok" ? "ok" : health.status === "unavailable" ? "bad"
     : health.status === "checking" ? "unknown" : "warn";
-  const text = health?.message ?? "Status unknown";
-  const down = Object.entries(health?.models ?? {}).filter(([, m]) => m.state === "down").map(([k]) => k);
+  const text = (health && HEALTH_TEXT[health.status]) ?? health?.message ?? "Status unknown";
+  const down = Object.entries(health?.models ?? {}).filter(([, m]) => m.state === "down").map(([k]) => HEALTH_MODEL[k] ?? k);
   return (
     <span className={styles.health} data-tone={tone} role="status" aria-live="polite"
-      title={down.length ? `Unavailable right now: ${down.join(", ")}` : "D3, the routing preview and both Qwen models answer"}>
+      title={down.length ? `Unavailable right now: ${down.join(", ")}` : "D3 flash, Vela 3 flash and the language model behind vllm-sr/auto answer"}>
       <span className={styles.healthDot} aria-hidden="true" />{text}
     </span>
   );
@@ -49,7 +56,6 @@ function backHref(landingUrl: string, theme: Theme) {
 
 export function TopBar({ stats, health, theme, onTheme, landingUrl }: { stats: Stats | null; health: Health | null; theme: Theme; onTheme: (t: Theme) => void; landingUrl?: string }) {
   const s = stats ?? {};
-  const share = s.share ?? null;
   const m = s.model_ms ?? null;
   return (
     <header className={styles.bar}>
@@ -59,7 +65,7 @@ export function TopBar({ stats, health, theme, onTheme, landingUrl }: { stats: S
             <ArrowLeft size={16} aria-hidden="true" /><span className={styles.backText}>All demos</span>
           </a>
         )}
-        <h1 title="D3 decides, Qwen chats">Returns validator Demo</h1>
+        <h1 title="D3 decides; the language model picked by vllm-sr/auto words the reply">Returns validator Demo</h1>
       </div>
 
       <div className={styles.stats} role="group" aria-label="Stats of this chat">
@@ -71,8 +77,8 @@ export function TopBar({ stats, health, theme, onTheme, landingUrl }: { stats: S
           {fmtInt(s.d3_calls)}
           {s.d3_ms_median != null && <span className={styles.unit}>{Math.round(s.d3_ms_median)} ms<span className={styles.long}> median</span></span>}
         </Stat>
-        <Stat label="Qwen 9B / 27B" hint="Share of this chat's turns that Vela sent to Qwen 9B and to Qwen 27B">
-          {share ? <>{fmtPct(share.qwen9b)}<span className={styles.vs}>/</span>{fmtPct(share.qwen27b)}</> : DASH}
+        <Stat label="Reasoning on" hint="Replies where the Router switched reasoning on, of the replies the language model wrote in this chat">
+          {s.llm_turns == null || !s.turns ? DASH : <>{fmtInt(s.reasoning_turns ?? 0)}<span className={styles.vs}>/</span>{fmtInt(s.llm_turns)}<span className={styles.unit}>{s.llm_turns === 1 ? "reply" : "replies"}</span></>}
         </Stat>
         <Stat label="Blocked / off-topic" hint="Turns stopped by the guardrail, and off-topic turns, in this chat; both get a fixed reply with no model call">
           {s.blocked == null && s.off_topic == null ? DASH : <>{fmtInt(s.blocked ?? 0)}<span className={styles.vs}>/</span>{fmtInt(s.off_topic ?? 0)}</>}
@@ -81,10 +87,10 @@ export function TopBar({ stats, health, theme, onTheme, landingUrl }: { stats: S
           {fmtInt(s.image_checks_avoided)}
         </Stat>
 
-        <Stat label="Decision time" hint="Time of every D3 call in this chat" wide><Dur ms={m?.d3} /></Stat>
-        <Stat label="LLM time" hint="Time of every Qwen call in this chat (claim reading and replies)" wide><Dur ms={m?.llm} /></Stat>
-        <Stat label="Total model time" hint="All model calls in this chat: Vela routing, D3 and Qwen" wide><Dur ms={m?.total} /></Stat>
-        <Stat label="LLM tokens generated" hint={`Tokens Qwen wrote in this chat. D3 writes none; it read ${fmtInt(s.d3_tokens ?? 0)}, mostly image tokens.`} wide>
+        <Stat label="Decision time" hint="D3 flash and Vela 3 flash calls in this chat" wide><Dur ms={m?.decision} /></Stat>
+        <Stat label="LLM time" hint="Every vllm-sr/auto call in this chat (claim reading and replies)" wide><Dur ms={m?.llm} /></Stat>
+        <Stat label="Total model time" hint="All model calls in this chat: Vela, D3 and the language model" wide><Dur ms={m?.total} /></Stat>
+        <Stat label="LLM tokens generated" hint={`Tokens the language model wrote in this chat, reasoning tokens included. D3 and Vela write none; they read ${fmtInt(s.d3_tokens ?? 0)}, mostly image tokens.`} wide>
           {s.llm_tokens == null ? DASH : <>{fmtInt(s.llm_tokens)}<span className={styles.unit}>tokens</span></>}
         </Stat>
       </div>

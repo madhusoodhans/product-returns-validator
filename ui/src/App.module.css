@@ -1,8 +1,14 @@
 /* One fixed-height screen: each column scrolls on its own. */
-.shell { display: grid; grid-template-rows: auto minmax(0, 1fr); height: 100dvh; min-height: 0; overflow: hidden; }
+.shell { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; height: 100dvh; min-height: 0; overflow: hidden; }
 .body { display: grid; grid-template-columns: clamp(256px, 19vw, 300px) minmax(0, 1fr) clamp(380px, 30vw, 470px); min-height: 0; }
 .body > * { min-height: 0; }
+/* Always-visible notice under the panels. */
+.footer {
+  padding: 6px var(--space-4); border-top: 1px solid var(--border); background: var(--background);
+  font-size: var(--text-xs); line-height: 1.4; color: var(--text-muted); text-align: center; text-wrap: balance;
+}
 @media (max-width: 1100px) {
+  .footer { position: sticky; bottom: 0; z-index: 10; }
   .shell { height: auto; min-height: 100dvh; overflow: visible; }
   .body { grid-template-columns: minmax(0, 1fr); }
   .body > * { height: auto; max-height: none; }

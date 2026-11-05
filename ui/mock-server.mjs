@@ -63,7 +63,7 @@ function matchOrder(text, pending) {
   const q = { ...choice("order", "Which order", probs), labels };
   const threshold = 0.75;
   const matched = q.choice !== "unclear" && probs[q.choice] >= threshold ? orderOf[q.choice] : null;
-  return { detail: { model: "vllm-sr/d3-mini", questions: [q], escalated: [], threshold }, matched, cands: cands.map((o) => o.order) };
+  return { detail: { model: "vllm-sr/d3-flash", questions: [q], escalated: [], threshold }, matched, cands: cands.map((o) => o.order) };
 }
 
 // ---------- scenarios (data/scenarios.json) ----------
@@ -95,11 +95,29 @@ const HINTS = {
   "m-command:1": { intent: "command" },
   "i-laptop:2": { intent: "info", ask: "why", hard: true },
   "i-three:3": { intent: "info", ask: "why", hard: true },
+  "e-manager:0": { intent: "damage", issue: "break", part: "glass", effort: "high" },
+  "e-manager:1": { intent: "person", effort: "high" },
+  "e-legal:0": { intent: "damage", issue: "detached", part: "sole", effort: "high" },
+  "e-policy:0": { intent: "info", ask: "policy_info", effort: "medium" },
+  "e-policy:1": { intent: "damage", issue: "chip", part: "mug" },
 };
-// docs/API.md "Chat ending and 27B marker": the LLM that wrote each sample turn's reply (null = fixed reply). The real
-// server takes it from the last bench run; here it follows the scripts: fixed replies for blocked / off-topic, Qwen 27B
-// where the hint says `hard`.
-const turnModel = (s, t, i) => (t.expect === "blocked" || t.expect === "off_topic" ? null : HINTS[`${s.id}:${i}`]?.hard ? "qwen27b" : "qwen9b");
+// What vllm-sr/auto picks (docs/API.md "Router step"): the Router chooses the model and the reasoning effort per call.
+// Here it follows the scripts: reasoning off for normal turns, medium for complex ones, high for upset or urgent ones
+// (hint `effort`, or the older `hard`).
+const ROUTES = {
+  fast: { model: "qwen/qwen3.8-flash-next", decision: "fast", reasoning: "off", effort: "effort_off", signals: "task:chat", ranking: null },
+  standard: { model: "qwen/qwen3.8-27b", decision: "standard", reasoning: "on", effort: "effort_medium", signals: "task:chat,complexity:medium", ranking: null },
+  hard: { model: "qwen/qwen3.8-27b", decision: "hard", reasoning: "on", effort: "effort_high", signals: "task:chat,complexity:high,sentiment:upset", ranking: null },
+};
+const routeFor = (h) => ROUTES[h?.effort === "high" || h?.hard ? "hard" : h?.effort === "medium" ? "standard" : "fast"];
+const routeSummary = (r) => `${r.decision.charAt(0).toUpperCase()}${r.decision.slice(1)} decision, ${r.reasoning === "on" ? `reasoning on (${r.effort.replace(/^effort_/, "")})` : "reasoning off"}`;
+// GET /api/samples: the Router's pick for each sample turn's reply (null = fixed reply). The real server takes it from the
+// last bench run; here it follows the scripts.
+const turnRoute = (s, t, i) => {
+  if (t.expect === "blocked" || t.expect === "off_topic") return null;
+  const r = routeFor(HINTS[`${s.id}:${i}`]);
+  return { model: r.model, decision: r.decision, reasoning: r.reasoning, effort: r.effort };
+};
 const hintOf = new Map();
 for (const g of scenarioFile.groups) for (const s of g.scenarios) s.turns.forEach((t, i) => { if (t.text && HINTS[`${s.id}:${i}`]) hintOf.set(t.text.trim(), HINTS[`${s.id}:${i}`]); });
 
@@ -111,8 +129,8 @@ function samplesPayload() {
         id: s.id, title: s.title, subtitle: s.subtitle, order: s.order ?? null,
         product: s.order ? orderOf[s.order]?.product ?? null : null,
         expected: s.expected ?? [...s.turns].reverse().find((t) => t.expect !== "closed")?.expect ?? s.turns[s.turns.length - 1].expect,
-        turns: s.turns.map((t, i) => ({ ...(t.text ? { text: t.text } : {}), ...(t.image ? { image: t.image } : {}), expect: t.expect, model: turnModel(s, t, i) })),
-      })).map((sc) => ({ ...sc, uses_27b: sc.turns.some((t) => t.model === "qwen27b") })),
+        turns: s.turns.map((t, i) => ({ ...(t.text ? { text: t.text } : {}), ...(t.image ? { image: t.image } : {}), expect: t.expect, route: turnRoute(s, t, i) })),
+      })).map((sc) => ({ ...sc, uses_reasoning: sc.turns.some((t) => t.route?.reasoning === "on") })),
     })),
     policies,
   };
@@ -133,14 +151,15 @@ const productOfPath = (path) => String(path).match(/samples\/([^/]+)\//)?.[1] ??
 const WRONG_SHOWS = { laptop: "mug", suitcase: "lamp", phone: "headphones", mug: "glass", glass: "mug", sneaker: "suitcase", headphones: "phone", lamp: "suitcase", bottle: "glass" };
 
 const HEALTH_WORDS = {
-  ok: "All systems working", qwen9b_down: "Using Qwen 27B for all replies: Qwen 9B unavailable",
-  standard: "Standard replies: language models unavailable", unavailable: "Assistant unavailable",
+  ok: "All systems working", checking: "Checking systems", guard_down: "Vela guardrail unavailable: D3 checks messages alone",
+  standard: "Standard replies: language model unavailable", unavailable: "Assistant unavailable",
 };
+const HEALTH = HEALTH_WORDS[process.env.MOCK_HEALTH] ? process.env.MOCK_HEALTH : "ok";
+const GUARD_UP = HEALTH !== "guard_down";
 function mockHealth() {
-  const status = HEALTH_WORDS[process.env.MOCK_HEALTH] ? process.env.MOCK_HEALTH : "ok";
-  const down = { ok: [], qwen9b_down: ["qwen9b"], standard: ["qwen9b", "qwen27b"], unavailable: ["d3"] }[status];
-  const models = Object.fromEntries(["d3", "preview", "qwen9b", "qwen27b"].map((m) => [m, { state: down.includes(m) ? "down" : "up" }]));
-  return { ok: status === "ok", status, message: HEALTH_WORDS[status], models };
+  const down = { ok: [], checking: [], guard_down: ["guard"], standard: ["llm"], unavailable: ["d3"] }[HEALTH];
+  const models = Object.fromEntries(["d3", "guard", "llm"].map((m) => [m, { state: HEALTH === "checking" ? "unknown" : down.includes(m) ? "down" : "up" }]));
+  return { ok: HEALTH === "ok", status: HEALTH, message: HEALTH_WORDS[HEALTH], ...Object.fromEntries(Object.entries(models).map(([k, v]) => [k, v.state === "up"])), models };
 }
 
 function gallery() {
@@ -192,27 +211,26 @@ ${overlays.join("\n")}
 
 // ---------- stats (per chat session, docs/API.md "GET /api/stats?session=<id>") ----------
 const freshStats = () => ({
-  turns: 0, d3_calls: 0, d3_ms: [], share: { qwen9b: 0, qwen27b: 0 }, blocked: 0, off_topic: 0, image_checks_avoided: 0,
-  model_ms: { routed: 0, baseline_27b: 0 }, tokens: { routed: 0, baseline_27b: 0, d3: 0 },
+  turns: 0, d3_calls: 0, d3_ms: [], vela_ms: 0, routes: {}, llm_turns: 0, reasoning_turns: 0, blocked: 0, off_topic: 0, image_checks_avoided: 0,
+  model_ms: 0, tokens: { llm: 0, d3: 0 },
 });
 const statsBySession = new Map();
 const statsOf = (sid) => { let st = statsBySession.get(sid); if (!st) { st = freshStats(); statsBySession.set(sid, st); } return st; };
 function statsPayload(sid) {
   const stats = statsBySession.get(sid) ?? freshStats();
-  const n = stats.share.qwen9b + stats.share.qwen27b;
   const sorted = [...stats.d3_ms].sort((a, b) => a - b);
   const out = {
     session: sid, turns: stats.turns, d3_calls: stats.d3_calls,
     d3_ms_median: sorted.length ? sorted[Math.floor(sorted.length / 2)] : null,
-    share: n ? { qwen9b: round2(stats.share.qwen9b / n), qwen27b: round2(stats.share.qwen27b / n) } : null,
+    llm_turns: stats.llm_turns, routes: stats.routes, reasoning_turns: stats.reasoning_turns,
     blocked: stats.blocked, off_topic: stats.off_topic, image_checks_avoided: Math.min(1, stats.image_checks_avoided),
     model_ms: null, llm_tokens: null, d3_tokens: stats.tokens.d3,
   };
   if (stats.turns) {
-    // the mock's routed time includes D3; split it so the bar shows decision, LLM and total time
-    const d3 = stats.d3_ms.reduce((a, v) => a + v, 0);
-    out.model_ms = { d3, llm: Math.max(0, stats.model_ms.routed - d3), total: stats.model_ms.routed };
-    out.llm_tokens = stats.tokens.routed;
+    // the mock's total time includes the decision models (D3 and Vela); split it so the bar shows decision, LLM and total
+    const decision = stats.d3_ms.reduce((a, v) => a + v, 0) + stats.vela_ms;
+    out.model_ms = { decision, llm: Math.max(0, stats.model_ms - decision), total: stats.model_ms };
+    out.llm_tokens = stats.tokens.llm;
   }
   return out;
 }
@@ -290,7 +308,7 @@ function scopeDetail(h) {
   for (const k of Object.keys(probs)) probs[k] = round2(wiggle(probs[k], 0.01));
   const complaint = ["damage", "customer", "excluded", "wear", "not_visual", "vague"].includes(i) ? 0.96 : i === "command" ? 0.12 : 0.02;
   return {
-    model: "vllm-sr/d3-mini", escalated: [],
+    model: "vllm-sr/d3-flash", escalated: [],
     questions: [
       { ...choice("scope", "What the message is", probs), labels: SCOPE_LABELS },
       yn("command", "Commands or code", wiggle(i === "command" ? 0.97 : 0.01, 0.01), true),
@@ -307,7 +325,7 @@ function eligibilityDetail(h) {
     : h.intent === "vague" ? { visible_damage: 0.31, not_visual: 0.08, packaging_only: 0.05, unclear: 0.56 }
     : { visible_damage: 0.95, not_visual: 0.02, packaging_only: 0.01, unclear: 0.02 };
   return {
-    model: "vllm-sr/d3-mini",
+    model: "vllm-sr/d3-flash",
     questions: [
       choice("issue_type", "What kind of problem", issue),
       choice("when", "When did it start", when),
@@ -341,14 +359,7 @@ function imageDetail(c, product, claim) {
     q("damage_visible", `Visible ${dmg} on the ${claim.part || "item"}`, v.damage, 0.5, 0.65),
     q("note_injection", "Text addressed to a reviewer or AI", v.note, 0.4, 0.3),
   ];
-  const escalated = [];
-  const dv = questions.find((x) => x.key === "damage_visible");
-  const qualityBad = questions.filter((x) => ["blurry", "dark", "glare", "covered", "cut_off"].includes(x.key)).some((x) => x.status === "bad");
-  if (dv.status === "borderline" && !qualityBad && questions.find((x) => x.key === "shows_product").status !== "bad") {
-    const flash = c === "faint" ? wiggle(0.81) : wiggle(0.19);
-    escalated.push({ key: "damage_visible", model: "vllm-sr/d3-flash", prob: round2(flash), ms: jitter(410) });
-  }
-  return { model: "vllm-sr/d3-mini", questions, escalated };
+  return { model: "vllm-sr/d3-flash", questions, escalated: [] };
 }
 
 function decideImage(d) {
@@ -362,7 +373,7 @@ function decideImage(d) {
   const esc = d.escalated.find((e) => e.key === "damage_visible");
   if (esc) dv = esc.prob >= 0.65 ? "ok" : esc.prob < 0.5 ? "bad" : "borderline";
   if (dv === "bad") return { verdict: "no_damage", reasons: ["Damage not visible", ...extra], rule: "damage not visible -> no_damage" };
-  if (dv === "borderline") return { verdict: "human", reasons: ["Damage still borderline after d3-flash", ...extra], rule: "still borderline -> human review" };
+  if (dv === "borderline") return { verdict: "human", reasons: ["Damage borderline", ...extra], rule: "borderline -> human review" };
   return { verdict: "accept", reasons: [`${by.damage_visible.label}`, "All quality checks passed", ...extra], rule: "quality ok, product ok, damage visible -> accept" };
 }
 
@@ -439,7 +450,7 @@ async function runTurn(body, send, aborted) {
     return;
   }
   stats.turns++;
-  let routedMs = 0, baseMs = 0, routedTok = 0, baseTok = 0;
+  let routedMs = 0;
 
   for (const n of NODES) step(n, "waiting");
   await sleep(120);
@@ -448,7 +459,7 @@ async function runTurn(body, send, aborted) {
   if (image && image.startsWith("data:") && !readableImage(image)) {
     if (text) step("guardrail", "skipped", { summary: "Not checked: the upload was not a readable image" });
     else step("guardrail", "skipped", { summary: "No text in this turn" });
-    step("router", "skipped", { model: "Vela 2.0 (vllm-sr)", ms: 1, summary: "Vela picked Qwen 9B; not called (fixed reply)", detail: { chosen: "qwen9b", router_decision: "returns-tiered" } });
+    step("router", "skipped", { summary: "Not called: fixed reply, no language model" });
     for (const n of ["claim", "policy", "eligibility", "image_check"]) step(n, "skipped", { summary: "The upload was not a readable image" });
     step("decision", "done", { ms: 0, summary: "Bad file", detail: { verdict: "bad_file", reasons: [], rule: "the upload is not a readable image -> ask for a photo" } });
     await fixedReply("bad_file", {});
@@ -460,45 +471,51 @@ async function runTurn(body, send, aborted) {
   // A follow-up such as "it was like that when it arrived" completes the claim from the earlier turn.
   if (h?.intent === "arrival") h = s.claim ? { intent: "damage", issue: s.claim.issue === "unclear" ? null : s.claim.issue, part: s.claim.part } : { intent: "chat" };
   if (text) {
-    step("guardrail", "running"); const ms = jitter(60); await sleep(ms); stats.d3_calls++; stats.d3_ms.push(ms); stats.tokens.d3 += 330; routedMs += ms;
-    const jb = h.intent === "inject" ? round2(wiggle(0.94, 0.03)) : h.intent === "command" ? round2(wiggle(0.8, 0.04)) : round2(wiggle(0.03, 0.02));
+    // Vela 3 flash (prompt attack, harm) and the D3 scope check run at once; the step's time is the slower of the two.
+    step("guardrail", "running"); const sms = jitter(60), vms = GUARD_UP ? jitter(45) : null; const ms = Math.max(sms, vms ?? 0); await sleep(ms);
+    stats.d3_calls++; stats.d3_ms.push(sms); stats.tokens.d3 += 330; routedMs += sms + (vms ?? 0);
+    if (vms != null) { stats.vela_ms += vms; stats.tokens.d3 += 120; }
+    const attack = !GUARD_UP ? null : h.intent === "inject" ? round2(wiggle(0.94, 0.03)) : h.intent === "command" ? round2(wiggle(0.8, 0.04)) : round2(wiggle(0.03, 0.02));
+    const harm = !GUARD_UP ? null : round2(wiggle(h.intent === "command" ? 0.31 : 0.02, 0.015));
+    const velaFlagged = attack != null && (attack >= 0.5 || harm >= 0.5);
+    const guardModel = GUARD_UP ? "vllm-sr/vela3-flash + vllm-sr/d3-flash" : "vllm-sr/d3-flash";
+    const scores = GUARD_UP ? `Vela attack ${attack.toFixed(2)}, harm ${harm.toFixed(2)}` : "D3 only";
+    const tail = GUARD_UP ? "" : "; Vela unavailable, D3 checked alone";
     const scope = scopeDetail(h);
     const by = Object.fromEntries(scope.questions.map((x) => [x.key, x]));
     const complaint = by.complaint.prob >= 0.5;
-    const why = h.intent === "inject" ? "jailbreak" : by.command.prob >= 0.5 ? "commands or code" : by.scope.choice === "instructions" ? "instructions to the assistant" : null;
+    const why = h.intent === "inject" ? "a prompt attack (Vela)" : by.command.prob >= 0.5 ? "commands or code" : by.scope.choice === "instructions" ? "instructions to the assistant" : null;
     const offTopic = !why && by.scope.choice === "off_topic";
-    const detail = { jailbreak: jb, pii: false, flagged: !!why || offTopic, model: "Vela 2.0 (vllm-sr) + vllm-sr/d3-mini", scope_check: scope, complaint: by.complaint.prob };
+    scope.ms = sms;
+    const detail = { attack, harm, vela_flagged: velaFlagged, vela_ms: vms, thresholds: { attack: 0.5, harm: 0.5 }, scope_check: scope,
+      complaint: by.complaint.prob, model: guardModel, flagged: (!!why && !complaint) || offTopic };
     if ((why && !complaint) || offTopic) {
       const verdict = offTopic ? "off_topic" : "blocked";
       if (offTopic) stats.off_topic++; else stats.blocked++;
-      step("guardrail", "blocked", { model: "Vela 2.0 + D3 mini", ms, summary: offTopic ? "Off-topic: fixed reply, no model call" : `Blocked: ${why}`, detail });
-      step("router", "skipped", { model: "Vela 2.0 (vllm-sr)", ms: 0, summary: "Vela picked no model (guard decision)", detail: { chosen: null, router_decision: "guard" } });
+      step("guardrail", "blocked", { model: guardModel, ms, summary: (offTopic ? "Off-topic: fixed reply, no model call" : `Blocked: ${why}`) + tail, detail });
+      step("router", "skipped", { summary: "Not called: fixed reply, no language model" });
       for (const n of ["claim", "policy", "eligibility", "image_check"]) step(n, "skipped", { summary: offTopic ? "Off-topic" : "Blocked by the guardrail" });
       step("decision", "done", { ms: 0, summary: offTopic ? "Off topic" : "Blocked", detail: { verdict, reasons: [],
         rule: offTopic ? "not about orders or returns -> fixed reply" : "instructions to the assistant, a jailbreak or commands, without a real complaint -> blocked" } });
       await fixedReply(verdict, { product: s.product, command: h.intent === "command" });
       return finish();
     }
-    step("guardrail", "done", { model: "Vela 2.0 + D3 mini", ms,
-      summary: why ? `Ignored ${why}; real complaint handled` : `Passed (jailbreak ${jb.toFixed(2)}, on topic)`, detail });
+    step("guardrail", "done", { model: guardModel, ms,
+      summary: (why ? `Ignored ${why}; real complaint handled` : `Passed (${scores}; D3: on topic)`) + tail, detail });
   } else {
     step("guardrail", "skipped", { summary: reviewing ? "Review asked for with a button, no text" : "No text in this turn" });
   }
   if (aborted()) return;
 
-  // 2. Router
-  step("router", "running"); { const ms = jitter(40); await sleep(ms);
-    const hard = !!h?.hard;
-    const p27 = round2(hard ? wiggle(0.74) : wiggle(0.17));
-    var model = hard ? "qwen27b" : "qwen9b";
-    stats.share[model]++;
-    step("router", "done", { model: "Vela 2.0 (vllm-sr)", ms, summary: hard ? "Hard turn, Qwen 27B" : "Normal turn, Qwen 9B", detail: { chosen: model, router_decision: "returns-tiered", reason: `decision model chose ${model} (p27 ${p27})` } });
-  }
-  const llmMs = (ms9) => (model === "qwen27b" ? Math.round(ms9 * 2.5) : ms9);
+  // 2. Router: vllm-sr/auto picks the model and the reasoning effort when the reply is written (see reply()); the
+  // claim extraction call is routed too (claim detail `route`).
+  const route = routeFor(h);
+  const extraction = ROUTES.fast;
+  const LLM = "vllm-sr/auto";
 
   // A model failure (type "simulate an error"): `error` event, then a `message` with verdict `error`.
   if (h?.intent === "fail") {
-    step("claim", "running", { model });
+    step("claim", "running", { model: LLM });
     await sleep(300);
     const msg = "The claim model did not answer (mock failure)";
     send({ type: "error", message: msg });
@@ -513,15 +530,14 @@ async function runTurn(body, send, aborted) {
     step("decision", "done", { ms: 0, summary: person ? "Human review" : "Info", detail: { verdict, reasons: [],
       rule: person ? "wants a person -> hand over" : "a question, not a claim step -> answer from the FAQ and policy, claim unchanged" } });
     const o = s.order ? orderOf[s.order] : null;
-    const r = await reply(verdict, { ask: h.ask, product: o?.product, order: o?.order, person, closed: s.closed?.verdict }, model);
-    routedMs += r.ms; baseMs += r.base; routedTok += r.tokens; baseTok += r.baseTok;
+    await reply(verdict, { ask: h.ask, product: o?.product, order: o?.order, person, closed: s.closed?.verdict });
     return finish();
   }
 
   // 3. Claim (text turns)
   if (text) {
-    step("claim", "running", { model });
-    const ms = jitter(llmMs(600)); await sleep(ms); routedMs += ms; baseMs += jitter(1500); routedTok += 640; baseTok += 640;
+    step("claim", "running", { model: LLM });
+    const ms = jitter(600); await sleep(ms); routedMs += ms; stats.tokens.llm += 120;
     let typed = text.match(/\b(\d{4})\b/)?.[1];
     if (typed && !orderOf[typed]) typed = null; // not on this account: ignored (the real server says so)
     // Naming another order starts a new claim on it.
@@ -540,8 +556,8 @@ async function runTurn(body, send, aborted) {
       ? m?.matched ? `Order ${o.order}: ${o.item} (matched by D3, ${m.detail.questions[0].probs[o.order].toFixed(2)})`
         : `Order ${o.order}, ${policies[o.product].name.toLowerCase()}${h.issue && h.issue !== "unclear" ? `, ${h.issue} on ${h.part || "item"}` : ""}`
       : which ? `Which order? ${which.join(" or ")}` : "No order number yet";
-    step("claim", "done", { model: m ? `${model} + vllm-sr/d3-mini` : model, ms, summary,
-      detail: { order: s.order, product: s.product, issue: s.claim.issue, part: s.claim.part, ...(m ? { order_match: m.detail } : {}) } });
+    step("claim", "done", { model: m ? `${LLM} + vllm-sr/d3-flash` : LLM, ms, summary,
+      detail: { order: s.order, product: s.product, issue: s.claim.issue, part: s.claim.part, route: { ...extraction, routing_ms: jitter(18) }, ...(m ? { order_match: m.detail } : {}) } });
   } else {
     step("claim", "skipped", { summary: s.order ? `From an earlier turn: order ${s.order}` : "No text in this turn" });
   }
@@ -550,7 +566,7 @@ async function runTurn(body, send, aborted) {
   if (!s.order) {
     for (const n of ["policy", "eligibility", "image_check"]) step(n, "skipped", { summary: "Not needed: no order yet" });
     step("decision", "done", { ms: 1, summary: "Need the order number", detail: { verdict: "need_order", reasons: ["No order number in the chat"], rule: "no order -> ask for it" } });
-    const r = await reply("need_order", { which: s.which }, model); routedMs += r.ms; baseMs += r.base; routedTok += r.tokens; baseTok += r.baseTok;
+    await reply("need_order", { which: s.which });
     return finish();
   }
   const o = orderOf[s.order], pol = policies[o.product];
@@ -559,7 +575,7 @@ async function runTurn(body, send, aborted) {
   if (s.closed) {
     for (const n of ["policy", "eligibility", "image_check"]) step(n, "skipped", { summary: n === "image_check" ? `Not needed: ${s.closed.why}` : "Decided in an earlier turn" });
     step("decision", "done", { ms: 1, summary: `Closed earlier: ${label(s.closed.verdict).toLowerCase()}`, detail: { ...s.closed.detail, verdict: "closed", rule: "claim decided in an earlier turn -> closed" } });
-    const r = await reply(s.closed.verdict, { ...s.closed.ctx, again: true, photo: !!image }, model); routedMs += r.ms; baseMs += r.base; routedTok += r.tokens; baseTok += r.baseTok;
+    await reply(s.closed.verdict, { ...s.closed.ctx, again: true, photo: !!image });
     return finish();
   }
   if (text && s.eligible == null) {
@@ -583,7 +599,7 @@ async function runTurn(body, send, aborted) {
       stats.image_checks_avoided++;
       const ctx = { order: o.order, product: o.product, window, days: o.delivered_days_ago, price: !window };
       s.closed = { verdict, why, detail, ctx };
-      const r = await reply(verdict, ctx, model); routedMs += r.ms; baseMs += r.base; routedTok += r.tokens; baseTok += r.baseTok;
+      await reply(verdict, ctx);
       return finish();
     }
   } else {
@@ -593,7 +609,7 @@ async function runTurn(body, send, aborted) {
 
   // 5. Eligibility D3 (text turns until the claim is eligible)
   if (text && s.eligible == null && h.intent !== "chat") {
-    step("eligibility", "running", { model: "vllm-sr/d3-mini" });
+    step("eligibility", "running", { model: "vllm-sr/d3-flash" });
     const ms = jitter(50); await sleep(ms); stats.d3_calls++; stats.d3_ms.push(ms); routedMs += ms; stats.tokens.d3 += 410;
     const d = eligibilityDetail(h);
     const by = Object.fromEntries(d.questions.map((x) => [x.key, x]));
@@ -609,7 +625,7 @@ async function runTurn(body, send, aborted) {
     }
     const flagged = by.injection.status !== "ok";
     const summary = verdict ? `${label(verdict)}: ${reasons[0].toLowerCase()}` : `Eligible, damage on arrival${flagged ? ", injection flagged" : ""}`;
-    step("eligibility", "done", { model: "vllm-sr/d3-mini", ms, summary, detail: d });
+    step("eligibility", "done", { model: "vllm-sr/d3-flash", ms, summary, detail: d });
     if (verdict) {
       step("image_check", "skipped", { summary: verdict === "clarify" ? "Not needed yet" : `Not needed: ${why}` });
       const policyLine = h.intent === "wear" || h.intent === "excluded" || h.intent === "customer" ? pol.not_covered[h.intent === "wear" ? pol.not_covered.length - 1 : 0]
@@ -617,14 +633,14 @@ async function runTurn(body, send, aborted) {
       const detail = { verdict, reasons: flagged ? [...reasons, "Instruction in the complaint ignored"] : reasons, rule };
       step("decision", "done", { ms: 1, summary: label(verdict), detail });
       if (verdict === "not_eligible" || verdict === "human") { stats.image_checks_avoided++; s.closed = { verdict, why, detail, ctx: { order: o.order, product: o.product, policyLine } }; }
-      const r = await reply(verdict, { order: o.order, product: o.product, policyLine }, model); routedMs += r.ms; baseMs += r.base; routedTok += r.tokens; baseTok += r.baseTok;
+      await reply(verdict, { order: o.order, product: o.product, policyLine });
       return finish();
     }
     s.eligible = true;
     if (!image) {
       step("image_check", "skipped", { summary: "Waiting for a photo" });
       step("decision", "done", { ms: 1, summary: "Ask for a photo", detail: { verdict: "need_photo", reasons: flagged ? ["Eligible under the policy", "Instruction in the complaint ignored"] : ["Eligible under the policy"], rule: "eligible -> ask for a photo" } });
-      const r = await reply("need_photo", { product: o.product }, model); routedMs += r.ms; baseMs += r.base; routedTok += r.tokens; baseTok += r.baseTok;
+      await reply("need_photo", { product: o.product });
       return finish();
     }
   } else {
@@ -637,27 +653,26 @@ async function runTurn(body, send, aborted) {
     step("image_check", "skipped", { summary: s.eligible ? "Waiting for a photo" : "Not needed yet" });
     const v = s.eligible ? "need_photo" : "clarify";
     step("decision", "done", { ms: 1, summary: label(v), detail: { verdict: v, reasons: [s.eligible ? "Still need a photo" : "Need more detail"], rule: s.eligible ? "eligible -> ask for a photo" : "no claim yet -> clarify" } });
-    const r = await reply(v, { product: o.product }, model); routedMs += r.ms; baseMs += r.base; routedTok += r.tokens; baseTok += r.baseTok;
+    await reply(v, { product: o.product });
     return finish();
   }
   const shownProduct = image.startsWith("data:") ? null : productOfPath(image);
   const c = image.startsWith("data:") ? "clear" : shownProduct && shownProduct !== o.product ? "wrong" : caseOf(image);
-  step("image_check", "running", { model: "vllm-sr/d3-mini" });
+  step("image_check", "running", { model: "vllm-sr/d3-flash" });
   const d = imageDetail(c, o.product, s.claim || {});
   let ms = jitter(300); await sleep(ms);
   for (const e of d.escalated) { await sleep(e.ms); ms += e.ms; }
-  stats.d3_calls += 1 + d.escalated.length; stats.d3_ms.push(ms); routedMs += ms; stats.tokens.d3 += 2600; baseMs += jitter(3800); baseTok += 1400;
+  stats.d3_calls += 1 + d.escalated.length; stats.d3_ms.push(ms); routedMs += ms; stats.tokens.d3 += 2600;
   const dec = decideImage(d);
   // The third unusable photo in a row goes to a person.
   if (dec.verdict === "retake") s.retakes = (s.retakes || 0) + 1;
   if (dec.verdict === "retake" && s.retakes >= 3) Object.assign(dec, { verdict: "human", reasons: [...dec.reasons, "Third unusable photo"], rule: "three unusable photos -> human review" });
   const bad = d.questions.filter((x) => x.status === "bad").map((x) => x.label.toLowerCase());
-  step("image_check", "done", { model: "vllm-sr/d3-mini", ms, summary: bad.length ? `${bad.length} bad: ${bad.join(", ")}` : d.escalated.length ? "Borderline, escalated to d3-flash" : "All checks pass", detail: d });
+  step("image_check", "done", { model: "vllm-sr/d3-flash", ms, summary: bad.length ? `${bad.length} bad: ${bad.join(", ")}` : "All checks pass", detail: d });
   step("decision", "done", { ms: 1, summary: label(dec.verdict), detail: dec });
   const flagged = d.questions.find((x) => x.key === "note_injection").status !== "ok";
   const issueWord = { crack: "crack", chip: "chip", dent: "dent", tear: "tear", break: "break", detached: "detached sole", scratch: "scratch" }[s.claim?.issue] || "damage";
-  const r = await reply(dec.verdict, { order: o.order, product: o.product, part: s.claim?.part, issueWord, reasons: dec.reasons.filter((x) => !x.startsWith("Text in")), flagged, borderline: dec.verdict === "human" }, model);
-  routedMs += r.ms; baseMs += r.base; routedTok += r.tokens; baseTok += r.baseTok;
+  await reply(dec.verdict, { order: o.order, product: o.product, part: s.claim?.part, issueWord, reasons: dec.reasons.filter((x) => !x.startsWith("Text in")), flagged, borderline: dec.verdict === "human" });
   if (dec.verdict === "human") s.closed = { verdict: "human", why: "with a person", detail: dec, ctx: { order: o.order, product: o.product } };
   if (dec.verdict === "accept") s.closed = { verdict: "accept", why: "already approved", detail: dec, ctx: { order: o.order, product: o.product, part: s.claim?.part, issueWord } };
   return finish();
@@ -672,32 +687,48 @@ async function runTurn(body, send, aborted) {
     for (const w of textOut.split(/(?<=\s)/)) { if (aborted()) break; send({ type: "token", text: w }); await sleep(12); }
     const o = s.order ? orderOf[s.order] : null;
     send({ type: "message", role: "assistant", text: textOut, verdict, order: orderPayload(o), policy_ref: null, ended });
-    baseMs += jitter(700); baseTok += 840;
   }
-  async function reply(verdict, ctx, m) {
+  async function reply(verdict, ctx) {
     // The reply is worded and checked by D3 before it is streamed. A reply that claims an approval that was not given is
     // replaced by a fixed fallback (scripted here for the injection sample, whose complaint asks for "pre-approved").
     let textOut = replyText(verdict, ctx);
     const t0 = Date.now();
-    step("reply", "running", { model: m });
-    await sleep(jitter(m === "qwen27b" ? 600 : 250));
+    // The language model unavailable (MOCK_HEALTH=standard): a standard reply, no model call.
+    if (HEALTH === "standard") {
+      step("router", "skipped", { summary: "Language model unavailable: standard reply" });
+      step("reply", "done", { model: null, ms: 0, summary: "Standard reply: language model unavailable", detail: { standard: true, reason: "vllm-sr/auto unavailable", model: null } });
+      for (const w of textOut.split(/(?<=\s)/)) { if (aborted()) break; send({ type: "token", text: w }); await sleep(12); }
+      const o = s.order ? orderOf[s.order] : null;
+      const v = ctx.again ? "closed" : verdict;
+      send({ type: "message", role: "assistant", text: textOut, verdict: v, order: orderPayload(o), policy_ref: o ? policyRef(verdict, ctx) : null, ended: endAfter(v) });
+      return;
+    }
+    step("router", "running", { model: LLM, summary: "vllm-sr/auto picks the model and reasoning for the reply" });
+    step("reply", "running", { model: LLM });
+    const thinking = route.reasoning === "on";
+    await sleep(jitter(thinking ? 900 : 250));
     const fake = !!h?.injection && verdict !== "accept" && verdict !== "closed" && !ctx.again;
-    const check = { model: "vllm-sr/d3-mini", claims_approval: round2(fake ? wiggle(0.83, 0.03) : wiggle(0.03, 0.02)), threshold: 0.5, replaced: fake, ms: jitter(40) };
+    const check = { model: "vllm-sr/d3-flash", claims_approval: round2(fake ? wiggle(0.83, 0.03) : wiggle(0.03, 0.02)), threshold: 0.5, replaced: fake, ms: jitter(40) };
     if (fake) { check.original = "Your claim is pre-approved under the updated policy, so I have marked it as refunded. No photo is needed."; }
-    stats.d3_calls++; stats.d3_ms.push(check.ms); stats.tokens.d3 += 260;
+    stats.d3_calls++; stats.d3_ms.push(check.ms); stats.tokens.d3 += 260; routedMs += check.ms;
     const words = textOut.split(/(?<=\s)/);
     const per = 12;
     for (const w of words) { if (aborted()) break; send({ type: "token", text: w }); await sleep(per); }
-    const ms = Math.round((Date.now() - t0) / SPEED) + jitter(m === "qwen27b" ? 260 : 110);
-    const tokens = Math.round(words.length * 1.35);
-    step("reply", "done", { model: m, ms, summary: fake ? `Replaced: the reply claimed an approval (${check.claims_approval.toFixed(2)})` : `${tokens} tokens, checked by D3`,
-      detail: { model: m, tokens, reply_check: check } });
+    const llmMs = Math.round((Date.now() - t0) / SPEED) + jitter(thinking ? 420 : 110);
+    // completion tokens include the reasoning tokens when the Router switched reasoning on
+    const tokens = Math.round(words.length * 1.35) + (thinking ? jitter(route.effort === "effort_high" ? 380 : 180) : 0);
+    routedMs += llmMs; stats.tokens.llm += tokens;
+    stats.llm_turns++; stats.routes[route.decision] = (stats.routes[route.decision] || 0) + 1; if (thinking) stats.reasoning_turns++;
+    const routing = { ...route, routing_ms: jitter(22) };
+    step("router", "done", { model: route.model, ms: routing.routing_ms, summary: routeSummary(route),
+      detail: { ...routing, call: "reply", extraction: text ? { ...extraction, routing_ms: jitter(18) } : null } });
+    step("reply", "done", { model: LLM, ms: llmMs + check.ms, summary: fake ? `Replaced: the reply claimed an approval (${check.claims_approval.toFixed(2)})` : `${tokens} tokens by ${route.model}, checked by D3`,
+      detail: { model: route.model, tokens, route: routing, reply_check: check } });
     const o = s.order ? orderOf[s.order] : null;
     const v = ctx.again ? "closed" : verdict;
     send({ type: "message", role: "assistant", text: textOut, verdict: v, order: orderPayload(o), policy_ref: o ? policyRef(verdict, ctx) : null, ended: endAfter(v) });
-    return { ms, base: Math.round(tokens * 45 + 260), tokens: tokens + 520, baseTok: tokens + 520 };
   }
-  /** message.ended after this reply's verdict; sets the session's end (docs/API.md "Chat ending and 27B marker"). */
+  /** message.ended after this reply's verdict; sets the session's end (docs/API.md "Chat ending"). */
   function endAfter(v) {
     s.blockedCount = (s.blockedCount || 0) + (v === "blocked" ? 1 : 0);
     s.offRow = v === "off_topic" ? (s.offRow || 0) + 1 : 0;
@@ -713,8 +744,7 @@ async function runTurn(body, send, aborted) {
     return s.ended;
   }
   function finish() {
-    stats.model_ms.routed += routedMs; stats.model_ms.baseline_27b += Math.max(baseMs, routedMs);
-    stats.tokens.routed += routedTok; stats.tokens.baseline_27b += Math.max(baseTok, routedTok);
+    stats.model_ms += routedMs;
     turns.set(turn, { turn, session: sid, steps });
     send({ type: "stats", ...statsPayload(sid) });
     send({ type: "done", turn });
@@ -755,7 +785,7 @@ createServer(async (req, res) => {
     if (p === "/api/samples" && req.method === "GET") return json(res, 200, samplesPayload());
     if (p === "/api/customer" && req.method === "GET") return json(res, 200, customerPayload());
     if (p === "/api/gallery" && req.method === "GET") return json(res, 200, gallery());
-    // MOCK_HEALTH=qwen9b_down|standard|unavailable shows the top bar's health badge in that state
+    // MOCK_HEALTH=checking|guard_down|standard|unavailable shows the top bar's health badge in that state
     if (p === "/api/health" && req.method === "GET") return json(res, 200, mockHealth());
     if (p === "/api/stats" && req.method === "GET") return json(res, 200, statsPayload(url.searchParams.get("session") || ""));
     if (p === "/api/reset" && req.method === "POST") {

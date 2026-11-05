@@ -40,8 +40,8 @@ export const NODE_LABEL: Record<NodeKey, string> = {
 };
 /** What each node is, shown under the name while it waits. */
 export const NODE_HINT: Record<NodeKey, string> = {
-  guardrail: "Vela jailbreak screen and D3 scope check on the message",
-  router: "Vela picks Qwen 9B or Qwen 27B for this turn",
+  guardrail: "Vela 3 screens for prompt attacks and harm; D3 checks the message is about orders",
+  router: "vllm-sr/auto picks the model and the reasoning effort for the reply",
   claim: "Order, item, issue and part as JSON",
   policy: "Return window, delivery and price limit, in code",
   eligibility: "D3 text decision over the policy and complaint",
@@ -51,13 +51,38 @@ export const NODE_HINT: Record<NodeKey, string> = {
 };
 export const D3_NODES: NodeKey[] = ["eligibility", "image_check"];
 
+/** The router's honest description, for its tooltip and detail. */
+export const ROUTER_NOTE = "The Router raises the reasoning effort for upset, urgent or complex turns; normal turns run with reasoning off. "
+  + "It does not switch to a larger model: the model can differ per call, and this shows which one answered.";
+
 const MODEL_NAME: Record<string, string> = {
-  qwen9b: "Qwen 9B", qwen27b: "Qwen 27B", "vllm-sr/d3-mini": "D3 mini", "vllm-sr/d3-flash": "D3 flash", "vllm-sr/d3-lite": "D3 lite",
-  "vllm-sr/d3-edge": "D3 edge", "vllm-sr/vela": "Vela", "Vela 2.0 (vllm-sr)": "Vela 2.0", "vllm-sr/guardrail": "Guardrail",
+  "vllm-sr/vela3-flash": "Vela 3 flash", "vllm-sr/d3-flash": "D3 flash", "vllm-sr/auto": "vllm-sr/auto",
 };
-const oneModel = (m: string) => MODEL_NAME[m] || m.replace(/^vllm-sr\//, "");
-/** "qwen9b + vllm-sr/d3-mini" -> "Qwen 9B + D3 mini". */
-export const modelName = (m: string | undefined) => (m ? m.split(/\s*\+\s*/).map(oneModel).join(" + ") : "");
+/** A routed model id as given, lightly prettified: "qwen/qwen3.8-27b" -> "Qwen3.8 27B", "qwen/qwen3.8-flash-next" -> "Qwen3.8 Flash Next". */
+export function routedName(id: string | null | undefined): string {
+  if (!id) return "";
+  const base = id.replace(/^[^/]+\//, "");
+  const m = base.match(/^([a-z]+)(\d[\w.]*)-(.+)$/i);
+  if (!m) return base;
+  const fam = m[1].charAt(0).toUpperCase() + m[1].slice(1);
+  const rest = m[3].split("-").map((w) => (/^\d+(\.\d+)?[bm]$/i.test(w) ? w.toUpperCase() : w.charAt(0).toUpperCase() + w.slice(1))).join(" ");
+  return `${fam}${m[2]} ${rest}`;
+}
+const oneModel = (m: string) => MODEL_NAME[m] || (m.startsWith("vllm-sr/") ? m.replace(/^vllm-sr\//, "") : routedName(m));
+/** "vllm-sr/auto + vllm-sr/d3-flash" -> "vllm-sr/auto + D3 flash". */
+export const modelName = (m: string | undefined | null) => (m ? m.split(/\s*\+\s*/).map(oneModel).join(" + ") : "");
+
+/** "effort_high" -> "high"; null when not reported or off. */
+export const effortWord = (e: string | null | undefined) => {
+  const w = (e ?? "").match(/effort_([a-z]+)/i)?.[1] ?? (/^[a-z]+$/i.test(e ?? "") ? e! : "");
+  return w && w.toLowerCase() !== "off" ? w.toLowerCase() : null;
+};
+/** Reasoning in words: "reasoning off", "reasoning on (high)", "reasoning not reported". */
+export const reasoningWords = (r: { reasoning?: string | null; effort?: string | null }) =>
+  r.reasoning === "off" ? "reasoning off" : r.reasoning === "on" ? `reasoning on${effortWord(r.effort) ? ` (${effortWord(r.effort)})` : ""}` : "reasoning not reported";
+/** A compact tag for a chat reply: "fast · reasoning off". */
+export const routeTag = (r: { decision?: string | null; reasoning?: string | null; effort?: string | null }) =>
+  `${r.decision || "routed"} · ${r.reasoning === "on" ? "reasoning on" : r.reasoning === "off" ? "reasoning off" : "reasoning not reported"}`;
 
 export const DASH = "–";
 export const fmtMs = (ms: number | undefined | null) => (ms == null ? DASH : ms >= 1000 ? `${(ms / 1000).toFixed(1)} s` : `${Math.round(ms)} ms`);

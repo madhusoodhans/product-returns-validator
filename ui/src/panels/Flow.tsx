@@ -10,9 +10,9 @@ import { ScrollArea } from "../components/arc/scroll-area/scroll-area";
 import { motionTokens } from "../components/arc/lib/motion-tokens";
 import {
   NODES, type ChoiceQ, type ClaimDetail, type D3Detail, type DecisionDetail, type GuardrailDetail, type NodeKey, type OrderMatch, type PolicyDetail,
-  type ReplyDetail, type RouterDetail, type StepEvent,
+  type ReplyDetail, type RouteDetail, type RouterDetail, type StepEvent,
 } from "../api";
-import { D3_NODES, NODE_HINT, NODE_LABEL, fmtMs, modelName, titleCase, verdictMeta } from "../format";
+import { D3_NODES, NODE_HINT, NODE_LABEL, ROUTER_NOTE, fmtMs, modelName, reasoningWords, routedName, titleCase, verdictMeta } from "../format";
 import type { Flow as FlowT, Replay } from "../useDemo";
 import { D3Legend, D3Questions } from "./D3Questions";
 import styles from "./Flow.module.css";
@@ -22,20 +22,25 @@ const shortTurn = (t: string) => t.match(/-(t\d+)$/)?.[1] ?? t;
 
 const STATUS_TEXT = { waiting: "Waiting", running: "Running", done: "Done", skipped: "Not needed", blocked: "Blocked", failed: "Failed" } as const;
 
-/** Vela's pick: the chosen model as one line and the Vela decision name small. No pick (guard decision): the summary says it. */
+/** "Fast decision, reasoning off" for one routed call. */
+const routeLine = (r: RouteDetail) => `${titleCase(r.decision || "unknown")} decision, ${reasoningWords(r)}`;
+
+/** What vllm-sr/auto picked for the reply: decision and reasoning, then the model it routed to, as given. The claim
+ * extraction call is routed on its own and shown small when it went elsewhere. */
 function RouterView({ d }: { d: RouterDetail }) {
-  if (!d.chosen) return null;
-  const hard = d.chosen === "qwen27b";
+  if (!d.decision && !d.model) return null;
+  const ex = d.extraction;
   return (
     <div className={styles.router}>
-      <p className={styles.routerPick}>{modelName(d.chosen)} <span className={styles.routerWhy}>({hard ? "hard turn" : "normal turn"})</span></p>
-      {d.router_decision && <p className={styles.small}>Vela decision <code className={styles.routerName}>{d.router_decision}</code></p>}
-      {"fallback" in d && (
-        <p className={styles.fallback}>
-          <TriangleAlert size={14} strokeWidth={2} aria-hidden="true" />
-          {d.fallback ? `${modelName(d.chosen)} unavailable: ${modelName(d.fallback)} instead` : "Language models unavailable: standard reply"}
-        </p>
+      <p className={styles.routerPick}>
+        {titleCase(d.decision || "unknown")} decision<span className={styles.routerWhy}>, {reasoningWords(d)}</span>
+      </p>
+      {d.model && <p className={styles.small}>Model <code className={styles.routerName} title={d.model}>{d.model}</code></p>}
+      {d.signals && <p className={styles.small}>Signals <code className={styles.routerName}>{d.signals}</code></p>}
+      {ex && (ex.decision || ex.model) && (
+        <p className={styles.small}>Claim reading: {routeLine(ex)}{ex.model ? `, ${routedName(ex.model)}` : ""}</p>
       )}
+      <p className={styles.note}>{ROUTER_NOTE}</p>
     </div>
   );
 }
@@ -129,13 +134,19 @@ function ScopeView({ m }: { m: D3Detail }) {
   );
 }
 
+/** Vela 3 flash scores against their thresholds, then the D3 scope check. No scores: Vela was unavailable. */
 function GuardView({ d }: { d: GuardrailDetail }) {
   const scope = d.scope_check?.questions?.length ? d.scope_check : null;
+  const ta = d.thresholds?.attack ?? 0.5, th = d.thresholds?.harm ?? 0.5;
+  const vela = d.attack != null || d.harm != null;
   return (
     <>
       <p className={styles.small}>
-        {d.jailbreak != null && <>Vela jailbreak or injection <span className={styles.num}>{d.jailbreak.toFixed(2)}</span></>}
-        {d.pii != null && <>{d.jailbreak != null ? " · " : ""}PII {d.pii ? "found" : "none"}</>}
+        {vela ? <>
+          Vela prompt attack <span className={styles.num} data-bad={(d.attack ?? 0) >= ta || undefined}>{d.attack != null ? d.attack.toFixed(2) : "–"}</span>, needs &lt; {ta.toFixed(2)}
+          {" · "}harm <span className={styles.num} data-bad={(d.harm ?? 0) >= th || undefined}>{d.harm != null ? d.harm.toFixed(2) : "–"}</span>, needs &lt; {th.toFixed(2)}
+          {d.vela_flagged ? " · flagged" : ""}
+        </> : "Vela unavailable, D3 checked alone"}
       </p>
       {scope && <ScopeView m={scope} />}
     </>
@@ -146,7 +157,7 @@ function GuardView({ d }: { d: GuardrailDetail }) {
 function ReplyView({ step, d }: { step: StepEvent; d: ReplyDetail }) {
   const c = d.reply_check;
   if (d.standard) return d.reason ? <p className={styles.small}>{d.reason}</p> : null;
-  const tokens = !step.summary && d.tokens != null ? <p className={styles.small}>{d.tokens} tokens</p> : null;
+  const tokens = !step.summary && d.tokens != null ? <p className={styles.small}>{d.tokens} tokens{d.model ? ` by ${d.model}` : ""}</p> : null;
   if (!c) return tokens;
   return (
     <>
@@ -199,8 +210,9 @@ function Node({ node, step, last }: { node: NodeKey; step: StepEvent | undefined
   const [open, setOpen] = useState(true);
   const verdictShown = node === "decision" && !!(step?.detail as DecisionDetail | undefined)?.verdict && step?.status === "done";
   // A replaced reply says so in its warning block (with the original), so the summary line is not repeated.
-  // A router that picked a model shows the pick as its own line, so the summary ("Normal turn, Qwen 9B") is not repeated.
-  const routerPick = node === "router" && status === "done" && !!(step?.detail as RouterDetail | undefined)?.chosen;
+  // A router that reports its pick shows it as its own lines, so the summary ("Fast decision, reasoning off") is not repeated.
+  const route = node === "router" ? (step?.detail as RouterDetail | undefined) : undefined;
+  const routerPick = node === "router" && status === "done" && !!(route?.decision || route?.model);
   const summary = verdictShown || replaced || routerPick ? "" : step?.summary || (status === "skipped" ? "Not needed" : status === "waiting" || !step ? NODE_HINT[node] : "");
   const hasDetail = !!step?.detail && (step.status === "done" || step.status === "blocked" || step.status === "failed") && (!isD3 || (hasQuestions && open));
   const detail: ReactNode = hasDetail ? <Detail node={node} step={step!} open={open} /> : null;
@@ -217,8 +229,8 @@ function Node({ node, step, last }: { node: NodeKey; step: StepEvent | undefined
       <span className={styles.rail} aria-hidden="true"><span className={styles.dot} /></span>
       <div className={styles.body}>
         <div className={styles.headRow}>
-          <h3 className={styles.name}>{NODE_LABEL[node]}{usesD3 && <span className={styles.d3}>D3</span>}</h3>
-          {model && <span className={styles.model} data-big={(node === "reply" && /qwen27b/.test(step?.model ?? "")) || undefined}>{model}</span>}
+          <h3 className={styles.name} title={node === "router" ? ROUTER_NOTE : undefined}>{NODE_LABEL[node]}{usesD3 && <span className={styles.d3}>D3</span>}</h3>
+          {model && <span className={styles.model} title={step?.model} data-big={(routerPick && route?.reasoning === "on") || undefined}>{model}</span>}
           {skipped && <span className={styles.inlineSkip}><span className={styles.skipTag}>Skipped</span>{summary}</span>}
           <span className={styles.ms}>{step?.ms != null && !skipped ? fmtMs(step.ms) : ""}</span>
           <span className={styles.srOnly}>{STATUS_TEXT[status]}</span>
@@ -251,7 +263,7 @@ function Node({ node, step, last }: { node: NodeKey; step: StepEvent | undefined
 /** D3 time this turn (docs/UI.md "D3 time in the flow header"): steps run by D3 alone (model contains "d3", e.g. eligibility,
  * photo check; for the guardrail only its D3 scope check, `scope_check.ms`), the
  * order match inside the claim step when the server times it (`order_match.ms`), and the reply check (`reply_check.ms`).
- * The claim and reply steps themselves are Qwen time and are not counted. */
+ * The claim and reply steps themselves are language model time and are not counted. */
 function d3Ms(steps: StepEvent[]): number {
   let ms = 0;
   for (const s of steps) {

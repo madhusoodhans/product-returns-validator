@@ -4,12 +4,14 @@ export type Verdict =
   | "accept" | "retake" | "mismatch" | "no_damage" | "not_eligible" | "human" | "clarify" | "blocked" | "need_photo" | "need_order"
   | "need_problem" | "closed" | "off_topic" | "info" | "bad_file" | "error" | "ended" | "busy" | "rate_limited" | "unavailable";
 
-/** `model`: the LLM that wrote this turn's reply in the last bench run (null for a fixed reply). */
-export interface Turn { text?: string; image?: string; expect?: Verdict; model?: "qwen9b" | "qwen27b" | null }
+/** What vllm-sr/auto picked for one call: the routed model, the Router decision, reasoning on/off and its effort. */
+export interface RouteBrief { model?: string | null; decision?: string | null; reasoning?: "on" | "off" | string | null; effort?: string | null }
+/** `route`: what the Router picked for this turn's reply in the last bench run (null for a fixed reply). */
+export interface Turn { text?: string; image?: string; expect?: Verdict; route?: RouteBrief | null }
 export interface Scenario {
   id: string; title: string; subtitle?: string; order?: string | null; product?: string | null; expected: Verdict; turns: Turn[];
-  /** Vela routed a turn of this chat to Qwen 27B in the last bench run. */
-  uses_27b?: boolean;
+  /** The Router switched reasoning on for a reply of this chat in the last bench run. */
+  uses_reasoning?: boolean;
 }
 export interface Group { key: string; title: string; scenarios: Scenario[] }
 export interface Policy {
@@ -20,7 +22,7 @@ export interface Samples { groups: Group[]; policies: Policies }
 /** message.order: the order the conversation is about, once its number is known. */
 export interface OrderInfo { order: string; product: string; item?: string; price?: number; delivered_days_ago?: number }
 export type PolicyRef = "covered" | "not_covered" | "window" | "review_limit" | "photo";
-/** message.ended: null while the chat is open (docs/API.md "Chat ending and 27B marker"). */
+/** message.ended: null while the chat is open (docs/API.md "Chat ending"). */
 export type EndReason = "approved" | "approved_and_handed_over" | "handed_over" | "not_covered" | "blocked" | "off_topic";
 export interface Ended { reason: EndReason | string; title: string; text: string; order?: string | null; actions: ("review" | "new_chat" | string)[] }
 export interface GalleryItem { path: string; product: string; case: string }
@@ -47,28 +49,30 @@ export type Question = ChoiceQ | YesNoQ;
 export interface Escalation { key: string; model: string; prob: number; ms?: number }
 export interface D3Detail { model?: string; questions: Question[]; escalated?: Escalation[]; ms?: number }
 
-/** Guardrail: Vela's jailbreak / PII screen plus a D3 scope check (choice `scope` and `intent` with `labels`, yes/no `command`, `complaint`). */
+/** Guardrail: Vela 3 flash scores (prompt attack, harm; null when Vela was unavailable) plus a D3 scope check (choice
+ * `scope` and `intent` with `labels`, yes/no `command`, `complaint`). */
 export interface GuardrailDetail {
-  jailbreak?: number; pii?: boolean; flagged?: boolean; complaint?: number; router_decision?: string; scope_check?: D3Detail | null;
+  attack?: number | null; harm?: number | null; vela_flagged?: boolean; vela_ms?: number | null;
+  thresholds?: { attack?: number; harm?: number }; flagged?: boolean; complaint?: number; model?: string; scope_check?: D3Detail | null;
 }
-/** Vela's pick for this turn; `chosen` is null when a guard decision means no model is called. No probabilities. */
-export interface RouterDetail {
-  chosen?: string | null; router_decision?: string; reason?: string;
-  /** Set when an LLM is down: the LLM that writes the reply instead (null: a standard reply, no LLM), and which are down. */
-  fallback?: string | null; unavailable?: string[];
-}
+/** What vllm-sr/auto picked for the reply call (router step `done`); `extraction`: the same for the claim-extraction call. */
+export interface RouteDetail extends RouteBrief { signals?: string | null; ranking?: string | null; routing_ms?: number | null }
+export interface RouterDetail extends RouteDetail { call?: string; extraction?: RouteDetail | null }
 /** D3 order matching on the claim step (no order number in the message): one choice question `order`. `ms` only if the server times it. */
 export interface OrderMatch extends D3Detail { threshold?: number; ms?: number }
 export interface ClaimDetail {
   order?: string | null; product?: string | null; issue?: string | null; part?: string | null; order_match?: OrderMatch | null;
+  /** The Router's choice for the claim-extraction call. */
+  route?: RouteDetail | null;
 }
 export interface PolicyDetail { rules: { label: string; ok: boolean }[] }
 export interface DecisionDetail { verdict: Verdict; reasons?: string[]; rule?: string }
 /** D3 check of the worded reply before it is streamed; a reply that claims an approval not given is replaced. */
 export interface ReplyCheck { model?: string; claims_approval: number; threshold: number; replaced: boolean; ms?: number; original?: string }
-/** `standard`: no LLM could word the reply, so a fixed template words the decision (`reason` says why). */
+/** `model`: the model the Router picked. `standard`: the language model was unavailable, so a fixed template words the
+ * decision (`reason` says why). `tokens` include reasoning tokens. */
 export interface ReplyDetail {
-  model?: string | null; tokens?: number; reply_check?: ReplyCheck | null; fallback_from?: string; standard?: boolean; reason?: string;
+  model?: string | null; tokens?: number; route?: RouteDetail | null; reply_check?: ReplyCheck | null; standard?: boolean; reason?: string;
 }
 
 export interface StepEvent {
@@ -78,11 +82,12 @@ export interface StepEvent {
 /** Stats of one chat session (GET /api/stats?session=<id> and the `stats` SSE event). */
 export interface Stats {
   session?: string; turns?: number; d3_calls?: number; d3_ms_median?: number | null;
-  share?: { qwen9b?: number; qwen27b?: number } | null;
+  /** Replies the language model wrote, by Router decision, and how many of them ran with reasoning on. */
+  llm_turns?: number; routes?: Record<string, number>; reasoning_turns?: number;
   blocked?: number; off_topic?: number; image_checks_avoided?: number;
-  /** This chat's model time in ms; null before its first turn. */
-  model_ms?: { d3: number; llm: number; total: number } | null;
-  /** Completion tokens Qwen wrote in this chat; null before its first turn. */
+  /** This chat's model time in ms (decision: D3 and Vela); null before its first turn. */
+  model_ms?: { decision: number; llm: number; total: number } | null;
+  /** Completion tokens the language model wrote in this chat, reasoning tokens included; null before its first turn. */
   llm_tokens?: number | null;
   d3_tokens?: number;
 }
@@ -119,9 +124,10 @@ export const getSamples = () =>
   getJson<Partial<Samples>>("api/samples").then((d): Samples => ({ groups: d.groups ?? [], policies: d.policies ?? {} }));
 export const getCustomer = () => getJson<Customer>("api/customer");
 /** GET /api/health: which models are up, and the top bar's plain-words status (docs/API.md "Model availability"). */
-export type HealthStatus = "ok" | "checking" | "preview_down" | "qwen9b_down" | "qwen27b_down" | "standard" | "unavailable";
+export type HealthStatus = "ok" | "checking" | "guard_down" | "standard" | "unavailable";
 export interface Health {
   ok: boolean; status: HealthStatus | string; message: string;
+  d3?: boolean; guard?: boolean; llm?: boolean;
   models?: Record<string, { state: "up" | "down" | "unknown"; reason?: string | null; retry_in_s?: number | null }>;
 }
 export const getHealth = () => getJson<Health>("api/health");

@@ -2,7 +2,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   NODES, errText, getCustomer, getStats, getTurn, newSession, streamChat,
-  type Customer, type Ended, type Group, type NodeKey, type OrderInfo, type PolicyRef, type Scenario, type Stats, type StepEvent, type Verdict,
+  type Customer, type Ended, type Group, type NodeKey, type OrderInfo, type PolicyRef, type RouterDetail, type Scenario, type Stats, type StepEvent, type Verdict,
 } from "./api";
 
 export interface Msg {
@@ -27,6 +27,8 @@ export interface Msg {
   system?: boolean;
   /** message.ended of this reply (the chat ended with it). */
   ended?: Ended | null;
+  /** What vllm-sr/auto picked for this reply (the turn's router step `done`); unset for fixed and standard replies. */
+  route?: RouterDetail | null;
 }
 
 export type Flow = Partial<Record<NodeKey, StepEvent>>;
@@ -34,8 +36,9 @@ export interface Replay { turn: string; msgId: string; steps: Flow | null; error
 export interface Playing { scenario: Scenario; group: string; turn: number; all: boolean }
 /** Actual verdict of every turn of a finished scenario run. */
 export type Outcomes = Record<string, (Verdict | undefined)[]>;
-/** Per scenario: did a reply step of the last run use Qwen 27B (Vela decides live, so this can differ from `uses_27b`). */
-export type Used27 = Record<string, boolean>;
+/** Per scenario: did the Router switch reasoning on for a reply of the last run (it decides live, so this can differ
+ * from `uses_reasoning`, which comes from the bench run). */
+export type UsedReasoning = Record<string, boolean>;
 /** Matched only when every turn's verdict equals that turn's `expect`. */
 export const matches = (sc: Scenario, got: (Verdict | undefined)[]) => sc.turns.every((t, i) => !t.expect || got[i] === t.expect);
 
@@ -72,7 +75,7 @@ export function useDemo() {
   const [busy, setBusy] = useState(false);
   const [playing, setPlaying] = useState<Playing | null>(null);
   const [outcomes, setOutcomes] = useState<Outcomes>({});
-  const [used27, setUsed27] = useState<Used27>({});
+  const [usedReasoning, setUsedReasoning] = useState<UsedReasoning>({});
   /** The chat is over (message.ended); the composer is replaced by the end banner. */
   const [ended, setEnded] = useState<Ended | null>(null);
   const [order, setOrder] = useState<OrderInfo | null>(null);
@@ -85,7 +88,7 @@ export function useDemo() {
   const abortRef = useRef<AbortController | null>(null);
   const runRef = useRef(0);
   const greetingRef = useRef<string | null>(null);
-  const used27Ref = useRef(false);
+  const usedReasoningRef = useRef(false);
   /** The server has seen a turn of this chat (a `done` came back). */
   const hasTurnsRef = useRef(false);
   const opening = (): Msg[] => (greetingRef.current ? [{ id: mid(), role: "assistant", text: greetingRef.current, greeting: true }] : []);
@@ -141,7 +144,11 @@ export function useDemo() {
       await streamChat({ session: sid, has_turns: hasTurnsRef.current, ...input }, (e) => {
         switch (e.type) {
           case "step":
-            if (e.node === "reply" && e.status !== "skipped" && /qwen27b/.test(`${e.model ?? ""} ${(e.detail as { model?: string } | null)?.model ?? ""}`)) used27Ref.current = true;
+            if (e.node === "router" && e.status === "done" && e.detail) {
+              const route = e.detail as RouterDetail;
+              if (route.reasoning === "on") usedReasoningRef.current = true;
+              patch(aid, { route });
+            }
             setFlow((f) => ({ ...f, [e.node]: { ...f[e.node], ...e } }));
             break;
           case "token": patch(aid, (m) => ({ text: (m.text ?? "") + e.text })); break;
@@ -213,7 +220,7 @@ export function useDemo() {
     reset(true);
     await sleep(350);
     const got: (Verdict | undefined)[] = [];
-    used27Ref.current = false;
+    usedReasoningRef.current = false;
     for (let i = 0; i < sc.turns.length; i++) {
       if (runRef.current !== run) return undefined;
       setPlaying({ scenario: sc, group, turn: i, all });
@@ -238,7 +245,7 @@ export function useDemo() {
       await sleep(900);
     }
     setOutcomes((o) => ({ ...o, [sc.id]: got }));
-    setUsed27((u) => ({ ...u, [sc.id]: used27Ref.current }));
+    setUsedReasoning((u) => ({ ...u, [sc.id]: usedReasoningRef.current }));
     return got;
   }, [reset, send]);
 
@@ -276,7 +283,7 @@ export function useDemo() {
   }, [liveTurn, replay]);
 
   return {
-    session, messages, flow, liveTurn, replay, stats, busy, playing, outcomes, used27, order, error, customer, sampleChat, ended,
+    session, messages, flow, liveTurn, replay, stats, busy, playing, outcomes, usedReasoning, order, error, customer, sampleChat, ended,
     send, reset: () => reset(false), stop, playScenario, playAll, showTurn, closeReplay: () => setReplay(null),
   };
 }

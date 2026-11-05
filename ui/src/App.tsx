@@ -56,7 +56,7 @@ export function App() {
     <div className={styles.shell}>
       <TopBar stats={demo.stats} health={health} theme={theme} onTheme={setTheme} landingUrl={landingUrl} />
       <div className={styles.body}>
-        <Samples groups={samples.groups} error={samplesError} playing={demo.playing} outcomes={demo.outcomes} used27={demo.used27} playAll={playAll}
+        <Samples groups={samples.groups} error={samplesError} playing={demo.playing} outcomes={demo.outcomes} usedReasoning={demo.usedReasoning} playAll={playAll}
           onPlay={(g, sc) => demo.playScenario(g, sc)} onPlayAll={() => demo.playAll(samples.groups)} onStop={demo.stop} />
         <Chat messages={demo.messages} busy={demo.busy} playing={demo.playing} replayMsg={demo.replay?.msgId ?? null} liveTurn={demo.liveTurn}
           order={demo.order} policies={samples.policies}
@@ -65,6 +65,7 @@ export function App() {
           onSend={(i) => demo.send(i)} onOpenTurn={demo.showTurn} onGallery={() => setGalleryOpen(true)} onReset={demo.reset} />
         <Flow flow={demo.flow} replay={demo.replay} hasTurn={demo.messages.some((m) => m.role === "user")} onBack={demo.closeReplay} />
       </div>
+      <footer className={styles.footer}>Messages and photos are processed by the hosted vllm-sr API (research and evaluation use).</footer>
       <Gallery open={galleryOpen} onOpenChange={setGalleryOpen} policies={samples.policies} onPick={(path) => demo.send({ image: path })} />
     </div>
   );
