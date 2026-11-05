@@ -38,10 +38,11 @@
 .title { display: flex; align-items: center; justify-content: center; min-width: 0; }
 .title h1 { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-display); font-size: var(--text-lg); letter-spacing: var(--tracking-display); }
 .actions { display: flex; align-items: center; justify-content: flex-end; gap: var(--space-3); min-width: 0; }
+.actions > * { flex: none; }
 /* Model availability in plain words; the dot carries the tone. */
 .health {
   display: inline-flex; align-items: center; gap: 7px; max-width: 21rem; padding: 3px 10px; border-radius: 999px;
-  font-size: var(--text-xs); line-height: 1.35; color: var(--text-secondary); background: var(--surface);
+  font-size: var(--text-xs); line-height: 1.35; white-space: nowrap; color: var(--text-secondary); background: var(--surface);
   border: 1px solid var(--border-subtle);
 }
 .healthDot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--text-muted); }
@@ -51,7 +52,7 @@
 .health[data-tone="bad"] { color: var(--danger); border-color: color-mix(in oklch, var(--danger) 45%, transparent); }
 .health[data-tone="bad"] .healthDot { background: var(--danger); }
 
-@media (max-width: 900px) {
+@media (max-width: 1240px) {
   .bar { grid-template-columns: minmax(0, 1fr) auto; }
   .title { grid-column: 1 / -1; grid-row: 2; justify-content: flex-start; }
   .title h1 { white-space: normal; font-size: var(--text-base); }

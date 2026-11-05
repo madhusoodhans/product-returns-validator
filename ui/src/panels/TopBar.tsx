@@ -51,7 +51,7 @@ export function TopBar({ health, theme, onTheme, landingUrl, keyStatus, busy, on
         )}
       </div>
       <div className={styles.title}>
-        <h1 title="D3 decides; the language model picked by vllm-sr/auto words the reply">Returns validator Demo</h1>
+        <h1 title="Vela guards each message, D3 decides, MoM (vllm-sr/auto) words the reply">Product returns demo · vllm-sr with Vela, D3 and MoM</h1>
       </div>
 
       <div className={styles.actions}>
