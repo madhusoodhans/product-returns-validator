@@ -12,10 +12,10 @@ from email.utils import parsedate_to_datetime
 
 import requests
 
-SLOTS = int(os.environ.get("MODEL_SLOTS", "12"))      # calls at once per API kind (hosted keys allow 16)
+SLOTS = min(12, int(os.environ.get("MODEL_SLOTS", "12")))  # calls at once per API kind (a hosted key allows 16 chats)
 QUEUE = int(os.environ.get("MODEL_QUEUE", "100"))     # calls waiting for a slot per kind; more -> Busy at once
 WAIT_S = float(os.environ.get("MODEL_WAIT_S", "15"))  # longest wait for a slot
-RETRY_CAP_S = 5.0
+RETRY_CAP_S = 5.0     # a longer Retry-After is not waited out inside a turn: the second 429 makes the turn Busy
 THROTTLED = (429, 503)
 BUSY_TEXT = "The service is busy, please try again."
 
@@ -56,8 +56,8 @@ class Gate:
         self.sem.release()
 
 
-GATES = {"d3": Gate("D3 (/v1/systemone)"), "chat": Gate("chat completions"),
-         "preview": Gate("routing preview")}
+GATES = {"d3": Gate("D3 (/v1/systemone)"), "guard": Gate("Vela guardrail (/v1/systemone)"),
+         "chat": Gate("chat completions")}
 
 # counters since start, and the 429/503s of the running turn (a ContextVar: photo.py's threads copy it)
 COUNTS = {"throttled": 0}
@@ -80,8 +80,8 @@ def _note_throttled():
             d["throttled"] += 1
 
 
-def retry_after(r):
-    """Seconds to wait from a Retry-After header (seconds or HTTP date), default 1, at most RETRY_CAP_S."""
+def retry_after(r, cap=RETRY_CAP_S):
+    """Seconds to wait from a Retry-After header (seconds or HTTP date), default 1, at most `cap`."""
     v = r.headers.get("retry-after")
     try:
         s = float(v)
@@ -90,23 +90,34 @@ def retry_after(r):
             s = parsedate_to_datetime(v).timestamp() - time.time()
         except (TypeError, ValueError):
             s = 1.0
-    return min(RETRY_CAP_S, max(0.0, s))
+    return min(cap, max(0.0, s))
+
+
+COOLDOWN_CAP_S = 60.0
+_cool = {}   # kind -> time until which the API asked us to wait (Retry-After of a 429)
 
 
 @contextmanager
 def post(kind, url, **kw):
     """requests.post through the gate of `kind`, holding the slot until the response is consumed. A 429/503 is retried
-    once after Retry-After; a second one raises Busy."""
+    once after Retry-After when that is at most RETRY_CAP_S; a second one, or a longer wait, raises Busy. While a 429's
+    Retry-After runs, other calls of the same kind raise Busy at once without a request."""
+    if _cool.get(kind, 0) > time.time():
+        raise Busy(f"{GATES[kind].name}: rate limited, retry after {_cool[kind] - time.time():.0f} s", 429)
     for attempt in (0, 1):
         with GATES[kind], requests.post(url, **kw) as r:
             if r.status_code not in THROTTLED:
                 yield r
                 return
-            code, wait = r.status_code, retry_after(r)
+            code, wait = r.status_code, retry_after(r, COOLDOWN_CAP_S)
         _note_throttled()
-        if attempt == 0:
+        if code == 429 and r.headers.get("retry-after"):
+            _cool[kind] = max(_cool.get(kind, 0), time.time() + wait)
+        if attempt == 0 and wait <= RETRY_CAP_S:
             time.sleep(wait)
-    raise Busy(f"{GATES[kind].name} answered {code} twice", code)
+            continue
+        break
+    raise Busy(f"{GATES[kind].name} answered {code}" + (" twice" if attempt else f", retry after {wait:.0f} s"), code)
 
 
 class Window:

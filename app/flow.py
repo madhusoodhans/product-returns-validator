@@ -12,6 +12,8 @@ before the claim is clear its result is kept, and it decides the claim once the 
 import copy
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor
+from contextvars import copy_context
 
 import availability
 import claim
@@ -20,7 +22,7 @@ import photo
 import reply
 import turn_checks
 from availability import UNAVAILABLE_TEXT, Unavailable
-from models import BadImage, chat_stream, image_url
+from models import D3_MODEL, GUARD_MODEL, LLM_MODEL, BadImage, chat_stream, image_url
 
 NODES = ["guardrail", "router", "claim", "policy", "eligibility", "image_check", "decision", "reply"]
 MAX_PHOTOS = 3
@@ -160,39 +162,45 @@ class Session:
         for n in NODES:
             yield step(n, "waiting")
 
-        # 1. guardrail + 2. router: one Router preview (Vela 2.0) + the D3 scope check
+        # 1. guardrail: Vela (prompt attack, harm) and D3's scope check, both at once on the hosted System One API.
+        # 2. router: vllm-sr/auto picks the model and reasoning effort when the reply is written (step filled in then).
         intent = "claim"
-        recent = [{"role": "user", "content": self.history[-1]["content"]}]   # history would keep a block forever
         yield step("guardrail", "running" if text else "skipped", None if text else "No text in this turn")
-        yield step("router", "running", None, "Vela 2.0 (vllm-sr)")
-        pv, pv_ms = turn_checks.router_preview(recent)
-        # cached repeats answer in ~1 ms: count them at the uncached median; a failed call counts what it took
-        calls.append(("router", max(pv_ms, turn_checks.PREVIEW_UNCACHED_MS) if pv else pv_ms, 0))
-        router_block = bool(pv) and pv["decision"] == "returns-guard"
         if text:
             prev = next((m["content"] for m in reversed(self.history[:-1]) if m["role"] == "assistant"), None)
-            sc, sdetail, sms, stok = turn_checks.scope_check(text, prev)
+            with ThreadPoolExecutor(2) as pool:   # each thread copies this context: its 429s count for this turn
+                fv = pool.submit(copy_context().run, turn_checks.vela_guard, text)
+                fs = pool.submit(copy_context().run, turn_checks.scope_check, text, prev)
+                vg, vms, vtok = fv.result()
+                sc, sdetail, sms, stok = fs.result()
+            if vg:
+                calls.append(("vela", vms, vtok))
             calls.append(("d3", sms, stok))
+            vela_block = bool(vg) and vg["flagged"]
             intent = sc["intent"]
             ctx["complaint"] = sc["complaint"]
             command = sc["command"] >= 0.5
             names_own = any(n in claim.CUSTOMER["orders"] for n in re.findall(r"\b\d{4,6}\b", text))
             sure_normal = sc["scope"] == "returns" and sc["command"] < 0.2 and (
                 sc["probs"].get("returns", 0) >= 0.9 or names_own)
-            vela_false_alarm = router_block and sure_normal
-            injection = (router_block and not sure_normal) or sc["scope"] == "instructions" or command
+            vela_false_alarm = vela_block and sure_normal
+            injection = (vela_block and not sure_normal) or sc["scope"] == "instructions" or command
             if intent == "human" and not command:
                 injection = False      # "I want a person, not a bot" reads as instructions; it is a fair request
             sdetail["ms"] = sms
-            gdetail = {"jailbreak": round(pv["jailbreak"], 4) if pv else None, "pii": bool(pv) and pv["pii"] >= 0.5,
-                       "router_decision": pv and pv["decision"], "scope_check": sdetail,
-                       "complaint": round(sc["complaint"], 4), "model": "Vela 2.0 (vllm-sr) + vllm-sr/d3-mini"}
-            jb = f"jailbreak {pv['jailbreak']:.2f}" if pv else "D3 only"
+            gdetail = {"attack": round(vg["attack"], 4) if vg else None, "harm": round(vg["harm"], 4) if vg else None,
+                       "vela_flagged": vela_block, "vela_ms": vms if vg else None,
+                       "thresholds": {"attack": turn_checks.ATTACK, "harm": turn_checks.HARM},
+                       "scope_check": sdetail, "complaint": round(sc["complaint"], 4),
+                       "model": f"{GUARD_MODEL} + {D3_MODEL}" if vg else D3_MODEL}
+            jb = f"Vela attack {vg['attack']:.2f}, harm {vg['harm']:.2f}" if vg else "D3 only"
             coded = command and re.search(r"[;|&$<>{}`]|rm -|drop table|curl |powershell", text, re.I)
-            what = ("commands or code" if coded else jb if router_block else "instructions to the assistant")
-            gstatus, summary = "done", f"Passed ({jb}, on topic)"
+            what = ("commands or code" if coded else
+                    "a prompt attack (Vela)" if vela_block and sc["scope"] != "instructions" else
+                    "instructions to the assistant")
+            gstatus, summary = "done", f"Passed ({jb}; D3: on topic)"
             if vela_false_alarm:
-                summary = f"Passed: Vela flagged {jb}, D3 sure it is a normal returns message"
+                summary = f"Passed: Vela flagged it ({jb}), D3 sure it is a normal returns message"
             if injection and sc["complaint"] >= 0.5:
                 summary = f"Ignored {what}; real complaint handled"
             elif injection:
@@ -201,47 +209,15 @@ class Session:
             elif sc["scope"] == "off_topic" and intent not in ("human", "refund_info", "policy_info"):
                 gstatus, summary, verdict = "blocked", "Off-topic: fixed reply, no model call", "off_topic"
                 ctx["fixed"] = "off_topic"
-            if pv and pv["pii"] >= 0.5:
-                summary += ", personal data flagged"
             gdetail["flagged"] = gstatus == "blocked"
-            yield step("guardrail", gstatus, summary + ("" if pv else "; Router unavailable"),
-                       "Vela 2.0 + D3 mini" if pv else "D3 mini", (pv_ms if pv else 0) + sms, gdetail)
+            yield step("guardrail", gstatus, summary + ("" if vg else "; Vela unavailable, D3 checked alone"),
+                       gdetail["model"], max(vms, sms) if vg else sms, gdetail)
 
         fixed = verdict in ("blocked", "off_topic", "bad_file")
-        if pv and pv["model"] in ("qwen9b", "qwen27b"):
-            model = pv["model"]
-            picked = f"{'Hard' if model == 'qwen27b' else 'Normal'} turn, {model_name(model)}"
-            rdetail = {"chosen": model, "router_decision": pv["decision"], "reason": pv["reason"]}
-        elif pv:
-            model = "qwen9b"
-            picked = "Vela picked no model (guard decision); Qwen 9B by default"
-            rdetail = {"chosen": None, "router_decision": pv["decision"], "reason": pv["reason"]}
-        elif fixed:  # Router down and nothing for a model to do
-            model, rdetail = "qwen9b", {"chosen": None}
-        elif len(availability.llm_order("qwen9b")) < 2:  # Router down and at most one LLM up: nothing to choose
-            model, rdetail = (availability.llm_order("qwen9b") or ["qwen9b"])[0], {"chosen": None}
-            picked = f"{model_name(model)} (Router unavailable)" if availability.llm_order(model) else "Router unavailable"
-        else:  # Router down: d3-mini picks
-            model, rdetail, rms, rtok = turn_checks.route(text, self.claim.stage.replace("_", " ") if self.claim else "new chat")
-            calls.append(("d3", rms, rtok))
-            picked = f"{model_name(model)} (Router unavailable, D3 picked)"
         if fixed:
-            picked = (f"Vela picked {model_name(pv['model'])}; " if pv and pv["model"] else "") + "not called (fixed reply)"
-        else:
-            # an LLM that is down is not used: the other one words the reply, or a standard reply when both are down
-            use = availability.llm_order(model)
-            if not use:
-                rdetail["fallback"] = None
-                picked += "; language models unavailable: standard reply"
-            elif use[0] != model:
-                rdetail["fallback"] = use[0]
-                picked += f"; {model_name(model)} unavailable, {model_name(use[0])} instead"
-            down = [m for m in ("qwen9b", "qwen27b") if not availability.available(m)]
-            if down:
-                rdetail["unavailable"] = down
-            ctx["llms"] = use
-        yield step("router", "skipped" if fixed else "done", picked,
-                   "Vela 2.0 (vllm-sr)" if pv else "vllm-sr/d3-mini", pv_ms, rdetail)
+            yield step("router", "skipped", "Not called: fixed reply, no language model")
+        elif not availability.available("llm"):
+            yield step("router", "skipped", "Language model unavailable: standard reply")
 
         # 3-6. the claim
         if verdict in ("blocked", "off_topic"):
@@ -301,30 +277,33 @@ class Session:
             out = {"text": reply.FIXED[key], "ms": 0, "tokens": 0}
             yield step("reply", "skipped", "Fixed reply, no model call")
         else:
-            out, used = None, None
+            out = None
             failed = ctx.setdefault("llm_failed", {})
-            # the turn's model, else the other LLM (router step); not one that already failed in this turn
-            for m in [m for m in ctx.get("llms", [model]) if m not in failed]:
-                yield step("reply", "running", None, m)
+            # one call to vllm-sr/auto; not again when it already failed in this turn (claim extraction)
+            if availability.available("llm") and "llm" not in failed:
+                yield step("router", "running", "vllm-sr/auto picks the model and reasoning for the reply", LLM_MODEL)
+                yield step("reply", "running", None, LLM_MODEL)
                 try:
-                    for kind, val in chat_stream(m, reply.messages(self.history, verdict, ctx)):
+                    for kind, val in chat_stream(reply.messages(self.history, verdict, ctx)):
                         if kind == "done":
-                            out, used = val, m  # buffered: the reply is checked before the customer sees it
-                    break
+                            out = val   # buffered: the reply is checked before the customer sees it
                 except Unavailable as e:
-                    failed[m] = e.text
-                    if e.reason == "timed out":   # do not make the customer wait for a second model as well
-                        break
+                    failed["llm"] = e.text
             if out is None:
+                if steps["router"]["status"] in ("waiting", "running"):
+                    yield step("router", "skipped" if steps["router"]["status"] == "waiting" else "failed",
+                               "No answer from vllm-sr/auto: standard reply", LLM_MODEL)
                 yield from self._standard_reply(verdict, ctx, "; ".join(failed.values()), step)
                 out = {"text": reply.standard(verdict, ctx)}
             else:
-                calls.append((used, out["ms"], out["tokens"]))
-                rdetail = {"model": used, "tokens": out["tokens"]}
-                summary, ms = f"{out['tokens']} tokens", out["ms"]
-                if used != model:
-                    rdetail["fallback_from"] = model
-                    summary = f"{model_name(model)} unavailable, written by {model_name(used)}; " + summary
+                used = LLM_MODEL
+                route = out.get("route") or {}
+                ctx["route"] = route
+                calls.append(("llm", out["ms"], out["tokens"]))
+                rdetail = {"model": route.get("model"), "tokens": out["tokens"], "route": route}
+                summary, ms = f"{out['tokens']} tokens by {route.get('model') or 'the routed model'}", out["ms"]
+                yield step("router", "done", route_summary(route), route.get("model") or LLM_MODEL,
+                           route.get("routing_ms"), {**route, "call": "reply", "extraction": ctx.get("extract_route")})
                 approved = verdict == "accept" or (c and c.final and c.final[0] == "accept"
                                                    and verdict in ("closed", "info", "human"))
                 if not approved:
@@ -338,7 +317,7 @@ class Session:
                     else:
                         calls.append(("d3", cms, ctok))
                         ms += cms
-                        rdetail["reply_check"] = {"model": "vllm-sr/d3-mini", "claims_approval": round(p, 4),
+                        rdetail["reply_check"] = {"model": D3_MODEL, "claims_approval": round(p, 4),
                                                   "threshold": 0.5, "replaced": p >= 0.5, "ms": cms}
                         summary += ", checked by D3"
                         if p >= 0.5:
@@ -358,14 +337,14 @@ class Session:
         yield {"type": "message", "role": "assistant", "text": out["text"], "verdict": verdict,
                "order": c and {k: c.order[k] for k in ("order", "product", "item", "price", "delivered_days_ago")},
                "policy_ref": policy_ref(verdict, ctx, c), "ended": self.ended}
-        yield {"type": "done", "turn": tid, "calls": calls,
+        yield {"type": "done", "turn": tid, "calls": calls, "route": ctx.get("route"),
                "steps": [steps[n] for n in NODES if n in steps],
                "avoided": bool(c and c.final and verdict in ("not_eligible", "human") and not c.photo_checked)}
 
-    def _standard_reply(self, verdict, ctx, why, step, summary="Standard reply: language models unavailable"):
+    def _standard_reply(self, verdict, ctx, why, step, summary="Standard reply: language model unavailable"):
         """The reply step of a standard (template) reply; the text is reply.standard(verdict, ctx)."""
         yield step("reply", "done", summary, None, 0,
-                   {"standard": True, "reason": why or "Qwen 9B and Qwen 27B unavailable", "model": None})
+                   {"standard": True, "reason": why or "Language model unavailable", "model": None})
 
     def _ended_turn(self):
         """A message to a chat that has ended: nothing runs, nothing changes."""
@@ -478,22 +457,20 @@ class Session:
 
     # ------------------------------------------------------------------ claim, policy, eligibility, photo
     def _extract(self, text, step, calls, ctx):
-        """Order number and problem from the message: Qwen 9B, else Qwen 27B; with neither, the order numbers in the
+        """Order number and problem from the message: vllm-sr/auto (JSON schema); without it, the order numbers in the
         text (D3 order matching then runs as usual) and D3's scope-check answer on whether it describes a problem.
         Returns (extracted, ms, model or None, note or None)."""
-        failed = ctx.setdefault("llm_failed", {})   # model -> plain reason, so the reply does not try it again
-        for m in availability.llm_order("qwen9b"):
-            yield step("claim", "running", None, m)
+        failed = ctx.setdefault("llm_failed", {})   # so the reply does not try it again in this turn
+        if availability.available("llm"):
+            yield step("claim", "running", None, LLM_MODEL)
             try:
-                d, ms, tok = claim.extract(text, m)
+                d, ms, tok, route = claim.extract(text)
             except Unavailable as e:
-                failed[m] = e.text
-                if e.reason == "timed out":
-                    break
-                continue
-            calls.append((m, ms, tok))
-            note = None if m == "qwen9b" else f"{model_name(m)}: Qwen 9B unavailable"
-            return d, ms, m, note
+                failed["llm"] = e.text
+            else:
+                calls.append(("llm", ms, tok))
+                ctx["extract_route"] = route
+                return d, ms, LLM_MODEL, None
         yield step("claim", "running", None, None)
         known = [n for n in re.findall(r"\b\d{4,6}\b", text) if n in claim.CUSTOMER["orders"]]
         problem = text if ctx.get("complaint", 0) >= 0.5 else None
@@ -594,7 +571,9 @@ class Session:
                        "Which order? " + ctx["options"] if ctx.get("options") else "No order yet")
             if xnote:
                 summary += f" ({xnote})"
-            models = [m for m in (xm, "vllm-sr/d3-mini" if "order_match" in detail else None) if m]
+            if ctx.get("extract_route"):
+                detail["route"] = ctx["extract_route"]
+            models = [m for m in (xm, D3_MODEL if "order_match" in detail else None) if m]
             yield step("claim", "done", summary, " + ".join(models) or None, ms, detail)
         else:
             if c and c.final and self.queued:
@@ -644,7 +623,7 @@ class Session:
 
         # 5. eligibility (D3, text): re-run whenever the customer adds to the problem, until the claim is closed
         if new_problem:
-            yield step("eligibility", "running", None, "vllm-sr/d3-mini")
+            yield step("eligibility", "running", None, D3_MODEL)
             a, ms, tok = eligibility.ask(c.order["product"], c.complaint)
             calls.append(("d3", ms, tok))
             outcome, reason = eligibility.decide(a)
@@ -656,7 +635,7 @@ class Session:
             yield step("eligibility", "blocked" if outcome == "not_eligible" else "done",
                        f"{outcome.replace('_', ' ').capitalize()}: {reason}"
                        + (" (re-checked after the customer's new message)" if was == "need_photo" else ""),
-                       "vllm-sr/d3-mini", ms, eligibility.detail(a))
+                       D3_MODEL, ms, eligibility.detail(a))
             ctx["reason"] = reason
             if outcome == "not_eligible":
                 pol = claim.POLICIES[c.order["product"]]
@@ -728,7 +707,7 @@ class Session:
     def _photo(self, img, step, calls, ctx, early=False):
         """D3 photo check of one decoded upload; yields the image_check step, returns (verdict, reasons)."""
         c = self.claim
-        yield step("image_check", "running", None, "vllm-sr/d3-mini")
+        yield step("image_check", "running", None, D3_MODEL)
         v, reasons, det, ms, tok = photo.check(c.order["product"], img)
         c.photos += 1
         c.photo_checked = True
@@ -740,7 +719,7 @@ class Session:
         when = "Checked before the claim was clear: " if early else ""
         yield step("image_check", "done" if v == "accept" else "blocked",
                    when + ("Damage clearly visible" if v == "accept" else ", ".join(reasons)) + note,
-                   "vllm-sr/d3-mini", ms, det)
+                   D3_MODEL, ms, det)
         ctx["reasons"] = reasons
         return v, reasons
 
@@ -770,8 +749,14 @@ def policy_ref(verdict, ctx, c=None):
             "clarify": "covered"}.get(verdict)
 
 
-def model_name(m):
-    return {"qwen9b": "Qwen 9B", "qwen27b": "Qwen 27B"}.get(m, m)
+def route_summary(route):
+    """One line for the router step: what vllm-sr/auto picked for the reply."""
+    effort = (route.get("effort") or "").removeprefix("effort_")
+    reasoning = route.get("reasoning")
+    words = ("reasoning off" if reasoning == "off" else
+             f"reasoning on ({effort})" if reasoning == "on" and effort and effort != "off" else
+             "reasoning on" if reasoning == "on" else "reasoning not reported")
+    return f"{(route.get('decision') or 'unknown').capitalize()} decision, {words}"
 
 
 END = {

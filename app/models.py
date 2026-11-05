@@ -1,7 +1,9 @@
-"""Model calls: D3 (System One API) and Qwen (chat completions), both through the vllm-sr Router on :8899.
+"""Model calls on the hosted vllm-sr APIs: System One (D3 decisions, the Vela guardrail) and chat completions
+(`vllm-sr/auto`: the Router picks the model and the reasoning effort per request).
 
-Every call goes through availability.call (circuit breaker, plain-word failures) with its per-model timeout. Set
-ROUTER_API_KEY / ROUTER_ADMIN_API_KEY to send a bearer token (hosted APIs); the local Router needs none.
+Every call goes through availability.call (circuit breaker, plain-word failures) with its per-model timeout and through
+a limits.py slot. The API key comes from env VLLM_SR_API_KEY only; it is sent as a bearer token and never logged.
+Model names and the API base are set by env (defaults: the hosted ones).
 """
 import base64
 import os
@@ -15,26 +17,61 @@ from PIL import Image, ImageOps
 from availability import Unavailable, call, timeout as model_timeout
 from limits import Busy, Gate, post
 
-ROUTER_URL = os.environ.get("ROUTER_URL", "http://localhost:8899")
-D3_MODEL = os.environ.get("D3_MODEL", "vllm-sr/d3-mini")
+API_BASE = os.environ.get("VLLM_SR_API_BASE", "https://app.vllm-sr.ai").rstrip("/")
+D3_MODEL = os.environ.get("D3_MODEL", "vllm-sr/d3-flash")          # policy, eligibility, photo and scope checks
+GUARD_MODEL = os.environ.get("GUARD_MODEL", "vllm-sr/vela3-flash")  # prompt attack and harm screen
+LLM_MODEL = os.environ.get("LLM_MODEL", "vllm-sr/auto")             # claim extraction and reply wording
+MAX_IMAGES = 4               # per System One request (hosted d3-flash limit)
+MAX_IMAGE_BYTES = 8_000_000  # per image, decoded
 ROOT = Path(__file__).resolve().parent.parent
 
 
-def headers(admin=False):
-    key = os.environ.get("ROUTER_ADMIN_API_KEY" if admin else "ROUTER_API_KEY") or (
-        os.environ.get("ROUTER_API_KEY") if admin else None)
-    return {"authorization": f"Bearer {key}"} if key else {}
+class MissingKey(RuntimeError):
+    pass
 
 
-def d3(state, questions, images=(), model=D3_MODEL, timeout=None):
-    """Returns (answers, ms, tokens). Raises availability.Unavailable when D3 is down, fails or times out."""
+def api_key():
+    k = os.environ.get("VLLM_SR_API_KEY", "").strip()
+    if not k:
+        raise MissingKey("VLLM_SR_API_KEY is not set: the demo needs a vllm-sr API key (https://app.vllm-sr.ai). "
+                         "Set it in the environment (on a Hugging Face Space: as a Space secret).")
+    return k
+
+
+def headers(debug=False):
+    h = {"authorization": f"Bearer {api_key()}"}
+    if debug:   # the Router's choice in the response headers (x-vsr-selected-*)
+        h["x-vsr-debug"] = "true"
+    return h
+
+
+def route_info(r):
+    """What vllm-sr/auto picked for this request, from the response headers."""
+    h = r.headers
+    ms = h.get("x-vsr-routing-latency-ms")
+    try:
+        ms = round(float(ms), 1)
+    except (TypeError, ValueError):
+        ms = None
+    return {"model": h.get("x-vsr-selected-model"), "decision": h.get("x-vsr-selected-decision"),
+            "reasoning": h.get("x-vsr-selected-reasoning"), "effort": h.get("x-vsr-matched-projections"),
+            "signals": h.get("x-vsr-matched-decision-model"), "ranking": h.get("x-vsr-decision-ranking"),
+            "routing_ms": ms}
+
+
+def d3(state, questions, images=(), model=D3_MODEL, timeout=None, kind="d3"):
+    """One System One request. Returns (answers, ms, tokens). Raises availability.Unavailable when the model is down,
+    fails or times out. kind: "d3" or "guard" (its own breaker and slots)."""
+    images = list(images)
+    if len(images) > MAX_IMAGES:   # the hosted API refuses more; never split silently
+        raise ValueError(f"{len(images)} images in one System One request (max {MAX_IMAGES})")
     body = {"model": model, "state": state, "questions": questions}
     if images:
-        body["images"] = list(images)
+        body["images"] = images
     t = time.perf_counter()
-    with call("d3"):
-        with post("d3", f"{ROUTER_URL}/v1/systemone", json=body, headers=headers(),
-                  timeout=timeout or model_timeout("d3")) as r:
+    with call(kind):
+        with post(kind, f"{API_BASE}/v1/systemone", json=body, headers=headers(),
+                  timeout=timeout or model_timeout(kind)) as r:
             r.raise_for_status()
             out = r.json()
         answers = out["answers"]
@@ -83,6 +120,9 @@ def image_url(image):
             im.thumbnail((SIDE, SIDE), Image.LANCZOS)
             buf = io.BytesIO()
             im.save(buf, "JPEG", quality=90)
+            if buf.tell() > MAX_IMAGE_BYTES:   # cannot happen at 1600 px, but the API would refuse it
+                buf = io.BytesIO()
+                im.save(buf, "JPEG", quality=75)
     except (BadImage, Busy):
         raise
     except Exception as e:  # PIL: not an image, truncated, too many pixels; base64 errors
@@ -90,45 +130,58 @@ def image_url(image):
     return "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode()
 
 
-def chat(model, messages, max_tokens=300, schema=None, timeout=None):
-    """Non-streaming call. Returns (text, ms, tokens). Raises availability.Unavailable."""
-    body = {"model": model, "messages": messages, "max_tokens": max_tokens, "temperature": 0,
-            "chat_template_kwargs": {"enable_thinking": False}}
+def _body(messages, max_tokens, temperature, schema=None, stream=False):
+    body = {"model": LLM_MODEL, "messages": messages, "max_tokens": max_tokens, "temperature": temperature}
     if schema:
         body["response_format"] = {"type": "json_schema", "json_schema": {"name": "out", "schema": schema}}
+    if stream:
+        body.update(stream=True, stream_options={"include_usage": True})
+    return body
+
+
+# The Router may switch reasoning on (it cannot be switched off from here): reasoning tokens count against
+# max_tokens, so the budget leaves room for them.
+MAX_TOKENS = int(os.environ.get("LLM_MAX_TOKENS", "2048"))
+
+
+def chat(messages, max_tokens=MAX_TOKENS, schema=None, timeout=None):
+    """Non-streaming call to vllm-sr/auto. Returns (text, ms, tokens, route). Raises availability.Unavailable."""
     t = time.perf_counter()
-    with call(model):
-        with post("chat", f"{ROUTER_URL}/v1/chat/completions", json=body, headers=headers(),
-                  timeout=timeout or model_timeout(model)) as r:
+    with call("llm"):
+        with post("chat", f"{API_BASE}/v1/chat/completions", json=_body(messages, max_tokens, 0, schema),
+                  headers=headers(debug=True), timeout=timeout or model_timeout("llm")) as r:
             r.raise_for_status()
+            route = route_info(r)
             out = r.json()
-        text = out["choices"][0]["message"]["content"].strip()
-    # tokens = what the model wrote (completion tokens), the figure the top bar sums as "LLM tokens generated"
-    return text, round((time.perf_counter() - t) * 1000, 1), (out.get("usage") or {}).get("completion_tokens") or 0
+        text = (out["choices"][0]["message"].get("content") or "").strip()
+    # tokens = what the model wrote (completion tokens, reasoning included), the top bar's "LLM tokens"
+    return text, round((time.perf_counter() - t) * 1000, 1), (out.get("usage") or {}).get("completion_tokens") or 0, route
 
 
-def chat_stream(model, messages, max_tokens=300, timeout=None):
-    """Streaming call. Yields ("token", text) and finally ("done", {"ms", "tokens", "text"}), tokens being the completion
-    tokens. The whole stream must
-    finish within the model's timeout. Raises availability.Unavailable."""
-    body = {"model": model, "messages": messages, "max_tokens": max_tokens, "temperature": 0.3, "stream": True,
-            "stream_options": {"include_usage": True}, "chat_template_kwargs": {"enable_thinking": False}}
+def chat_stream(messages, max_tokens=MAX_TOKENS, timeout=None):
+    """Streaming call to vllm-sr/auto. Yields ("route", info) once the headers arrive, ("token", text) for the answer
+    (reasoning is not shown) and finally ("done", {"ms", "tokens", "text", "route"}). The whole stream must finish
+    within the timeout. Raises availability.Unavailable."""
     t = time.perf_counter()
-    limit = timeout or model_timeout(model)
+    limit = timeout or model_timeout("llm")
     text, tokens = [], 0
-    with call(model):
-        with post("chat", f"{ROUTER_URL}/v1/chat/completions", json=body, headers=headers(), timeout=limit,
-                  stream=True) as r:
+    with call("llm"):
+        with post("chat", f"{API_BASE}/v1/chat/completions", json=_body(messages, max_tokens, 0.3, stream=True),
+                  headers=headers(debug=True), timeout=limit, stream=True) as r:
             r.raise_for_status()
+            route = route_info(r)
+            yield "route", route
             for line in r.iter_lines(decode_unicode=True):
                 if time.perf_counter() - t > limit[1]:
-                    raise Unavailable(model, "timed out")
+                    raise Unavailable("llm", "timed out")
                 if not line or not line.startswith("data:"):
                     continue
                 data = line[5:].strip()
                 if data == "[DONE]":
                     break
                 chunk = json.loads(data)
+                if chunk.get("error"):
+                    raise ValueError(f"stream error {(chunk['error'] or {}).get('code')}")
                 if chunk.get("usage"):
                     tokens = chunk["usage"].get("completion_tokens") or tokens
                 for c in chunk.get("choices") or []:
@@ -136,4 +189,7 @@ def chat_stream(model, messages, max_tokens=300, timeout=None):
                     if piece:
                         text.append(piece)
                         yield "token", piece
-    yield "done", {"ms": round((time.perf_counter() - t) * 1000, 1), "tokens": tokens, "text": "".join(text).strip()}
+        if not "".join(text).strip():
+            raise ValueError("empty reply")   # e.g. reasoning used the whole token budget
+    yield "done", {"ms": round((time.perf_counter() - t) * 1000, 1), "tokens": tokens, "text": "".join(text).strip(),
+                   "route": route}

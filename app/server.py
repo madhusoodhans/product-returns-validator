@@ -1,5 +1,7 @@
 """Returns photo check demo server (127.0.0.1:8602): the docs/API.md contract over app/flow.py, and the built page.
 
+Models: the hosted vllm-sr API (VLLM_SR_API_BASE, default https://app.vllm-sr.ai) with the key in VLLM_SR_API_KEY.
+
 Many visitors at once: chats are kept in memory with limits (State, limits.py); see docs/API.md "Many visitors".
 
 Run: ./start_server.sh [--bg]   (or: python app/server.py)
@@ -21,6 +23,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import availability  # noqa: E402
 import claim  # noqa: E402
+import models  # noqa: E402
 from flow import NODES, Session, failed_steps  # noqa: E402
 from limits import BUSY_TEXT, COUNTS, GATES, Busy, Limits, start_turn  # noqa: E402
 
@@ -44,36 +47,44 @@ UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
 RATE_TEXT = "You are sending messages faster than this demo allows. Please wait a minute and try again."
 EXPIRED_TEXT = "This chat expired, starting a new one."
 ERROR_TEXT = "Sorry, something went wrong on our side. Please send that again."
-# which LLM answered each sample turn in the last bench/run_scenarios.py run (Vela's choice), for the "27B" marker
-MODELS = (json.loads((ROOT / "data/scenario_models.json").read_text())
-          if (ROOT / "data/scenario_models.json").exists() else {})
+# TRUST_PROXY=N: the app runs behind N proxies (a Hugging Face Space: 1) that append the client address to
+# X-Forwarded-For; the per-IP limits then use the address the nearest trusted proxy saw. Unset: X-Forwarded-For is
+# ignored (a client could write anything there) and the peer address is used.
+TRUST_PROXY = int(os.environ.get("TRUST_PROXY", "0") or 0)
+# what vllm-sr/auto picked for each sample turn in the last bench/run_scenarios.py run (the Router decides live)
+ROUTES = (json.loads((ROOT / "data/scenario_routes.json").read_text())
+          if (ROOT / "data/scenario_routes.json").exists() else {})
 CASES = ["note_screen", "cut_off", "clear", "blurry", "dark", "glare", "intact", "hand", "finger", "note"]
 
 
 class SessionStats:
     """Stats of one chat (the top bar is per chat: a new chat or a new sample starts from zero)."""
     def __init__(self):
-        self.calls = []            # (kind, ms, tokens) of every model call; tokens = completion tokens for Qwen
-        self.reply_models = []     # model per turn
+        self.calls = []            # (kind, ms, tokens) of every model call: kind d3, vela or llm; llm tokens = completion
+        self.reply_routes = []     # per turn: what vllm-sr/auto picked for the reply ({model, decision, reasoning}), or None
         self.blocked = 0
         self.off_topic = 0
         self.avoided = 0           # claims closed before any photo check
 
     def as_dict(self):
         d3 = [ms for k, ms, _ in self.calls if k == "d3"]
-        n = len(self.reply_models)
-        llm = [m for m in self.reply_models if m]
-        llm_ms = sum(ms for k, ms, _t in self.calls if k.startswith("qwen"))
+        decision = [ms for k, ms, _ in self.calls if k in ("d3", "vela")]
+        n = len(self.reply_routes)
+        llm = [r for r in self.reply_routes if r]
+        llm_ms = sum(ms for k, ms, _t in self.calls if k == "llm")
+        decisions = {}
+        for r in llm:
+            decisions[r.get("decision") or "unknown"] = decisions.get(r.get("decision") or "unknown", 0) + 1
         return {"turns": n, "d3_calls": len(d3), "d3_ms_median": round(statistics.median(d3)) if d3 else None,
-                # share of the turns where an LLM actually wrote the reply
-                "share": {m: round(llm.count(m) / len(llm), 3) for m in ("qwen9b", "qwen27b")} if llm else None,
-                "llm_turns": len(llm),
+                # the turns where the language model wrote the reply, by the Router's decision and reasoning
+                "llm_turns": len(llm), "routes": decisions,
+                "reasoning_turns": sum(r.get("reasoning") == "on" for r in llm),
                 "blocked": self.blocked, "off_topic": self.off_topic, "image_checks_avoided": self.avoided,
-                # this chat's model time in ms: every D3 call, every Qwen call, and all model calls (with Vela's routing)
-                "model_ms": {"d3": round(sum(d3), 1), "llm": round(llm_ms, 1),
+                # this chat's model time in ms: decision models (D3 and Vela), the language model, and all model calls
+                "model_ms": {"decision": round(sum(decision), 1), "llm": round(llm_ms, 1),
                              "total": round(sum(ms for _k, ms, _t in self.calls), 1)} if n else None,
-                "llm_tokens": sum(t for k, _ms, t in self.calls if k.startswith("qwen")) if n else None,
-                "d3_tokens": sum(t for k, _ms, t in self.calls if k == "d3")}
+                "llm_tokens": sum(t for k, _ms, t in self.calls if k == "llm") if n else None,
+                "d3_tokens": sum(t for k, _ms, t in self.calls if k in ("d3", "vela"))}
 
 
 class Chat:
@@ -142,8 +153,9 @@ class State:
                 return
             st = chat.stats
             st.calls += done["calls"]
-            # the model that wrote the reply; None when the turn got a fixed reply (blocked, off-topic): no LLM ran
-            st.reply_models.append(next((k for k, _ms, _t in reversed(done["calls"]) if k.startswith("qwen")), None))
+            # what the Router picked for the reply; None when no LLM wrote it (fixed or standard reply)
+            r = done.get("route")
+            st.reply_routes.append({k: r.get(k) for k in ("model", "decision", "reasoning")} if r else None)
             st.blocked += verdict == "blocked"
             st.off_topic += verdict == "off_topic"
             st.avoided += bool(done.get("avoided"))
@@ -210,10 +222,10 @@ def samples():
         for sc in g["scenarios"]:
             sc["product"] = claim.ORDERS[sc["order"]]["product"] if sc.get("order") in claim.ORDERS else None
             # the outcome that matters: the last verdict before the claim was closed
-            used = MODELS.get(sc["id"], [])
+            used = ROUTES.get(sc["id"], [])
             for i, t in enumerate(sc["turns"]):
-                t["model"] = used[i] if i < len(used) else None
-            sc["uses_27b"] = "qwen27b" in used
+                t["route"] = used[i] if i < len(used) else None
+            sc["uses_reasoning"] = any(r and r.get("reasoning") == "on" for r in used)
             sc["expected"] = sc.get("expected") or next(t["expect"] for t in reversed(sc["turns"]) if t["expect"] != "closed")
     data["policies"] = claim.POLICIES
     return data
@@ -274,13 +286,16 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def client_ip(self):
-        """The visitor's address for the per-IP limits: the first X-Forwarded-For hop behind a proxy (Spaces), else
-        the peer. None on loopback without a proxy (the presenter's machine or an SSH tunnel): no per-IP limits there,
-        so Play all and the smoke test run freely."""
-        fwd = self.headers.get("x-forwarded-for")
-        if fwd:
-            return fwd.split(",")[0].strip()
+        """The visitor's address for the per-IP limits. TRUST_PROXY=N (behind N proxies, a Space: 1): the N-th
+        X-Forwarded-For entry from the right, the address the nearest trusted proxy saw (entries further left are
+        written by the client and can be faked). Otherwise the peer; None on loopback without a proxy (the presenter's
+        machine or an SSH tunnel): no per-IP limits there, so Play all and the smoke test run freely."""
         peer = self.client_address[0]
+        if TRUST_PROXY > 0:
+            hops = [h.strip() for h in (self.headers.get("x-forwarded-for") or "").split(",") if h.strip()]
+            if hops:
+                return hops[-min(TRUST_PROXY, len(hops))]
+            return peer
         return None if peer in ("127.0.0.1", "::1") else peer
 
     def do_GET(self):
@@ -441,6 +456,11 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
+    try:
+        models.api_key()
+    except models.MissingKey as e:
+        sys.exit(f"error: {e}")
+    print(f"models: {models.D3_MODEL}, {models.GUARD_MODEL}, {models.LLM_MODEL} on {models.API_BASE}", flush=True)
     print(f"returns validator demo on http://{HOST}:{PORT} (play all: {PLAY_ALL})", flush=True)
     threading.Thread(target=sweeper, daemon=True).start()
     availability.start_probes()

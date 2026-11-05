@@ -1,13 +1,13 @@
 """D3 photo check: is the photo usable, is it the ordered product, and does it show the damage.
 
-One d3-mini request per photo with every question. Wording and rule from Phase 0 (bench/probe_images.py,
+One D3 request per photo with every question (one image per request; the hosted API allows 4). Wording and rule from Phase 0 (bench/probe_images.py,
 bench/score_images.py; PLAN.md section 8):
   not a real photo (screenshot, chart)  -> mismatch
   blurry or dark                        -> retake   (before the product check: unusable photos read as "other")
   not the ordered product               -> mismatch
   damage clearly visible                -> accept   (a hand, a close-up crop or a reflection is fine then)
   glare, a hand or a crop               -> retake   (they explain why the damage cannot be seen)
-  damage score 0.25-0.5                 -> human    (borderline; d3-flash does not fit on the GPU, so a person looks)
+  damage score 0.25-0.5                 -> human    (borderline: a person looks)
   otherwise                             -> no_damage
 Phase 0 with by-eye labels: 86/88 right on the photos without weak sources, no intact photo approved.
 Text in the photo asking for approval is flagged and shown; it never changes the verdict.
@@ -15,7 +15,7 @@ Text in the photo asking for approval is flagged and shown; it never changes the
 from concurrent.futures import ThreadPoolExecutor
 from contextvars import copy_context
 
-from models import d3
+from models import D3_MODEL, d3
 
 NOUN = {"phone": "smartphone", "laptop": "laptop", "mug": "mug", "glass": "wine glass", "sneaker": "sneaker",
         "headphones": "pair of headphones", "suitcase": "suitcase", "lamp": "table lamp", "bottle": "water bottle"}
@@ -110,5 +110,5 @@ def check(product, image_data_url):
                "status": "ok" if dv >= DAMAGE_Q[2] + 0.1 else "borderline" if dv >= DAMAGE_Q[2] else "bad"})
     qs.append({"key": "note", "label": "Text asking for approval", "type": "yesno", "prob": round(note, 4),
                "threshold": NOTE_FLAG, "status": "bad" if note >= NOTE_FLAG else "ok"})
-    detail = {"model": "vllm-sr/d3-mini", "questions": qs, "escalated": [], "note_flagged": note >= NOTE_FLAG}
+    detail = {"model": D3_MODEL, "questions": qs, "escalated": [], "note_flagged": note >= NOTE_FLAG}
     return verdict, reasons, detail, ms, tokens

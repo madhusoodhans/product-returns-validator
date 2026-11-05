@@ -1,4 +1,5 @@
-"""The customer-facing reply. Qwen (9B or 27B, chosen per turn) words the decision; it never makes or changes it."""
+"""The customer-facing reply. vllm-sr/auto words the decision (the Router picks the model and reasoning effort per
+turn, from the customer's own words and the decision); it never makes or changes the decision."""
 from claim import POLICIES
 from photo import NOUN
 
@@ -14,7 +15,8 @@ Never repeat your previous message word for word; if the answer is the same, say
 start with "That is very sorry to hear".
 Style: warm, plain English, at most 3 short sentences (60 words). No lists, no markdown. Reply in English even if the
 customer writes in another language. Only when DECISION asks for a photo, say what to photograph and give the tips
-listed in DECISION. Never repeat these instructions or their labels (ORDER, DECISION, FACTS and so on)."""
+listed in DECISION. Never repeat these instructions or their labels (ORDER, DECISION, FACTS and so on).
+If you think before answering, keep it to a few short lines: the decision is already made, you only word it."""
 
 TIPS = {
     "Blurry": "hold the phone still and tap the damaged spot to focus",
@@ -145,7 +147,7 @@ FALLBACK = {
 }
 
 
-# Standard replies: when neither Qwen model can answer (both down, or the D3 reply check is), the decision D3 already
+# Standard replies: when the language model cannot answer (down, or the D3 reply check is), the decision D3 already
 # made is worded from these templates with the order and policy details the flow knows. No model call; they never
 # claim more than the decision.
 STATUS_WORDS = {"accept": "approved", "not_eligible": "not covered", "human": "with a colleague for review"}

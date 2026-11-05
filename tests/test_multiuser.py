@@ -15,6 +15,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "app"))
+import os  # noqa: E402
+os.environ.setdefault("VLLM_SR_API_KEY", "test-key")
 import limits  # noqa: E402
 import server  # noqa: E402
 from limits import Busy, Gate, Limits, Window  # noqa: E402
@@ -129,7 +131,7 @@ def test_gate_wait_and_queue():
 
 class Fake(BaseHTTPRequestHandler):
     """Answers with the next status in `codes` (429s carry Retry-After: 0.3)."""
-    codes, seen = [], []
+    codes, seen, retry = [], [], "0.3"
 
     def log_message(self, *a):
         pass
@@ -141,7 +143,7 @@ class Fake(BaseHTTPRequestHandler):
         body = json.dumps({"ok": code == 200}).encode()
         self.send_response(code)
         if code != 200:
-            self.send_header("retry-after", "0.3")
+            self.send_header("retry-after", Fake.retry)
         self.send_header("content-length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -171,6 +173,47 @@ def test_429_retry_once_then_busy():
         assert counts["throttled"] == 3 and len(Fake.seen) == 2
     finally:
         srv.shutdown()
+
+
+def test_long_retry_after_is_respected():
+    """A 429 asking for more than RETRY_CAP_S: no retry inside the turn, and calls of that kind are refused without a
+    request until the wait is over."""
+    srv, url = fake_url()
+    try:
+        Fake.codes, Fake.seen, Fake.retry = [429], [], "30"
+        try:
+            with limits.post("guard", url, json={}, timeout=5):
+                raise AssertionError("should be busy")
+        except Busy as e:
+            assert "retry after 30" in str(e) and len(Fake.seen) == 1
+        try:
+            with limits.post("guard", url, json={}, timeout=5):
+                raise AssertionError("should be busy")
+        except Busy as e:
+            assert "rate limited" in str(e) and len(Fake.seen) == 1, "no request while Retry-After runs"
+        with limits.post("d3", url, json={}, timeout=5) as r:   # other kinds are not held back
+            assert r.json() == {"ok": True}
+    finally:
+        Fake.retry = "0.3"
+        limits._cool.clear()
+        srv.shutdown()
+
+
+def test_client_ip_and_trust_proxy():
+    class H:
+        client_address = ("10.0.0.7", 1)
+        def __init__(self, xff):
+            self.headers = {"x-forwarded-for": xff} if xff else {}
+    ip = lambda xff, n: (setattr(server, "TRUST_PROXY", n), server.Handler.client_ip(H(xff)))[1]
+    try:
+        assert ip("1.2.3.4, 5.6.7.8", 0) == "10.0.0.7"   # not trusted: a client could write anything there
+        assert ip("1.2.3.4, 5.6.7.8", 1) == "5.6.7.8"    # the address the trusted proxy saw (it appends it)
+        assert ip("1.2.3.4, 5.6.7.8", 2) == "1.2.3.4"
+        assert ip("5.6.7.8", 3) == "5.6.7.8" and ip(None, 1) == "10.0.0.7"
+        H.client_address = ("127.0.0.1", 1)
+        assert ip("1.2.3.4", 0) is None                   # the presenter's own machine: no per-IP limits
+    finally:
+        server.TRUST_PROXY = 0
 
 
 def test_retry_after_cap():

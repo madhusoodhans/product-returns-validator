@@ -1,13 +1,14 @@
 """Which models are up: a tracker per model, fed by a background probe and by every real call (a circuit breaker).
 
-Models: "d3" (/v1/systemone), "preview" (the Router's routing preview), "qwen9b" and "qwen27b" (chat completions).
+Models: "d3" (D3 on /v1/systemone), "guard" (the Vela guardrail on /v1/systemone) and "llm" (vllm-sr/auto on
+/v1/chat/completions), all on the hosted vllm-sr API.
 - Every real call goes through `call(name)`: a connection error, a timeout, a 5xx or an unreadable answer is a
   failure; FAILS failures in a row mark the model down for BREAK_S seconds, and calls to it are then refused at once
   (Unavailable, no request sent). One success marks it up again. 429s and full slots (limits.Busy) are capacity, not
   failures.
-- `start_probes()` checks every model every HEALTH_INTERVAL seconds with a tiny request that works against any
-  OpenAI-compatible / System One endpoint (a 1-token chat completion, a one-question D3 call, a routing preview). A
-  model that is down is probed again when its breaker ends. Probes do not take model-call slots.
+- `start_probes()` checks the API every HEALTH_INTERVAL seconds with one GET /v1/models (no model call, no quota per
+  visitor): the API answers and lists the configured models. A model that is down is probed again when its breaker
+  ends. Probes do not take model-call slots; real calls keep the tracker current in between.
 - The flow asks `available(name)` before it relies on a model; the reasons the customer can see are plain words
   ("unavailable", "timed out"); exception text only goes to the server log.
 """
@@ -20,18 +21,17 @@ import requests
 
 from limits import Busy
 
-NAMES = ("d3", "preview", "qwen9b", "qwen27b")
-LABEL = {"d3": "D3", "preview": "Routing preview", "qwen9b": "Qwen 9B", "qwen27b": "Qwen 27B"}
+NAMES = ("d3", "guard", "llm")
+LABEL = {"d3": "D3", "guard": "Vela guardrail", "llm": "Language model"}
 FAILS = 3
 BREAK_S = float(os.environ.get("BREAKER_S", "30"))
-HEALTH_INTERVAL = float(os.environ.get("HEALTH_INTERVAL", "30"))
-# per call, seconds (a streamed reply: the whole stream)
-TIMEOUT = {"d3": float(os.environ.get("D3_TIMEOUT_S", "10")),
-           "preview": float(os.environ.get("PREVIEW_TIMEOUT_S", "5")),
-           "qwen9b": float(os.environ.get("QWEN9B_TIMEOUT_S", "30")),
-           "qwen27b": float(os.environ.get("QWEN27B_TIMEOUT_S", "60"))}
+HEALTH_INTERVAL = max(10.0, float(os.environ.get("HEALTH_INTERVAL", "60")))
+# per call, seconds (a streamed reply: the whole stream); the hosted API stops a request at 35 s
+TIMEOUT = {"d3": min(30.0, float(os.environ.get("D3_TIMEOUT_S", "15"))),
+           "guard": min(30.0, float(os.environ.get("GUARD_TIMEOUT_S", "5"))),
+           "llm": min(34.0, float(os.environ.get("LLM_TIMEOUT_S", "30"))),
+           "probe": 5.0}
 UNAVAILABLE_TEXT = "The assistant is unavailable right now. Please try again in a minute."
-OTHER_LLM = {"qwen9b": "qwen27b", "qwen27b": "qwen9b"}
 
 
 def timeout(name):
@@ -158,56 +158,42 @@ def call(name):
     TRACKER.success(name)
 
 
-def llm_order(prefer):
-    """The LLMs to try, preferred first, only those not marked down."""
-    return [m for m in (prefer, OTHER_LLM[prefer]) if TRACKER.available(m)]
-
-
 # ---------------------------------------------------------------------------------------------- probes
 
-def _headers(admin=False):
+def model_ids():
     import models
-    return models.headers(admin)
+    return {"d3": models.D3_MODEL, "guard": models.GUARD_MODEL, "llm": models.LLM_MODEL}
+
+
+def probe_models():
+    """One GET /v1/models (no model call, no quota): {name: (ok, reason, detail)} for every model. A model the API
+    does not list is "not offered" (a wrong model name in the environment, or a key without access)."""
+    import models
+    try:
+        r = requests.get(f"{models.API_BASE}/v1/models", headers=models.headers(), timeout=timeout("probe"))
+        if r.status_code == 429:
+            return {n: (True, None, "429: up but throttled") for n in NAMES}
+        if r.status_code in (401, 403):
+            return {n: (False, "unavailable", f"API key refused ({r.status_code})") for n in NAMES}
+        r.raise_for_status()
+        listed = {m.get("id") for m in r.json().get("data") or []}
+    except Exception as e:  # noqa: BLE001
+        reason, _counts = classify(e)
+        return {n: (False, reason, f"{type(e).__name__}") for n in NAMES}
+    return {n: (True, None, "") if mid in listed else (False, "not offered", f"{mid} is not listed by /v1/models")
+            for n, mid in model_ids().items()}
 
 
 def probe(name):
-    """One cheap request, outside the model-call slots. Returns (ok, reason, detail)."""
-    import models
-    import turn_checks
-    try:
-        if name == "d3":
-            body = {"model": models.D3_MODEL, "state": "Health check.",
-                    "questions": {"q": {"type": "noul", "instructions": "This is a test."}}}
-            r = requests.post(f"{models.ROUTER_URL}/v1/systemone", json=body, headers=_headers(), timeout=timeout(name))
-        elif name == "preview":
-            r = requests.post(turn_checks.PREVIEW, json={"model": "returns/auto", "messages": [
-                {"role": "user", "content": "hello"}]}, headers=_headers(admin=True), timeout=timeout(name))
-        else:
-            r = requests.post(f"{models.ROUTER_URL}/v1/chat/completions", headers=_headers(), timeout=timeout(name),
-                              json={"model": name, "messages": [{"role": "user", "content": "Say OK."}], "max_tokens": 1,
-                                    "temperature": 0, "chat_template_kwargs": {"enable_thinking": False}})
-        if r.status_code == 429:
-            return True, None, "429: up but throttled"
-        r.raise_for_status()
-        d = r.json()
-        if name == "d3":
-            d["answers"]["q"]["noul"]
-        elif name == "preview":
-            dec = (d.get("decision_result") or {}).get("decision_name")
-            if not dec or not str(dec).startswith("returns"):
-                return False, "not configured", f"returns/auto is not configured (decision {dec!r}); see deploy/router.yaml"
-        else:
-            d["choices"][0]
-        return True, None, ""
-    except Exception as e:  # noqa: BLE001
-        reason, _counts = classify(e)
-        return False, reason, f"{type(e).__name__}: {e}"
+    """Returns (ok, reason, detail) for one model (one GET /v1/models)."""
+    return probe_models()[name]
 
 
 def probe_all(names=NAMES):
-    """Probe now, one model at a time (keeps the load on a shared Router low)."""
+    """Probe now: one GET /v1/models for all models."""
+    res = probe_models()
     for n in names:
-        ok, reason, detail = probe(n)
+        ok, reason, detail = res[n]
         if ok:
             TRACKER.success(n)
         else:
@@ -242,20 +228,15 @@ def start_probes():
 
 
 def status(snap=None):
-    """What the top bar says: (key, plain words). Keys: ok, checking, preview_down, qwen9b_down, qwen27b_down,
-    standard, unavailable."""
+    """What the top bar says: (key, plain words). Keys: ok, checking, guard_down, standard, unavailable."""
     snap = snap or TRACKER.snapshot()
     down = {n for n, s in snap.items() if s["state"] == "down"}
     if "d3" in down:
         return "unavailable", "Assistant unavailable"
-    if {"qwen9b", "qwen27b"} <= down:
-        return "standard", "Standard replies: language models unavailable"
-    if "qwen9b" in down:
-        return "qwen9b_down", "Using Qwen 27B for all replies: Qwen 9B unavailable"
-    if "qwen27b" in down:
-        return "qwen27b_down", "Using Qwen 9B for all replies: Qwen 27B unavailable"
-    if "preview" in down:
-        return "preview_down", "Router preview unavailable: D3 picks the model"
+    if "llm" in down:
+        return "standard", "Standard replies: language model unavailable"
+    if "guard" in down:
+        return "guard_down", "Vela guardrail unavailable: D3 checks messages alone"
     if any(s["state"] == "unknown" for s in snap.values()):
         return "checking", "Checking systems"
     return "ok", "All systems working"

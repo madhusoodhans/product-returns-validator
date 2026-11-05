@@ -10,6 +10,9 @@ import base64, sys
 from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "app"))
+sys.path.insert(0, str(ROOT / "bench"))
+import hosted  # noqa: E402
+hosted.use_key()   # hosted vllm-sr API (bench/hosted.py)
 from flow import Session  # noqa: E402
 
 CHART = "data:image/png;base64," + base64.b64encode(open(ROOT / "data/test/chart.png", "rb").read()).decode()

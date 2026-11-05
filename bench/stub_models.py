@@ -1,20 +1,22 @@
-"""Fake Router for load tests: /v1/systemone (D3), /v1/chat/completions (plain, json_schema, streaming), the routing
-preview (/api/v1/routing/preview) and /v1/models, with realistic delays. No model runs.
+"""Fake hosted vllm-sr API for tests and load tests: /v1/systemone (D3 and the Vela guardrail), /v1/chat/completions
+(vllm-sr/auto: plain, json_schema, streaming, with the x-vsr-selected-* headers) and /v1/models, with realistic delays.
+No model runs, no quota used.
 
 Run:  python bench/stub_models.py [--port 8932]
-Point the demo at it:  ROUTER_URL=http://127.0.0.1:8932 ROUTER_ADMIN_URL=http://127.0.0.1:8932 python app/server.py
+Point the demo at it:  VLLM_SR_API_BASE=http://127.0.0.1:8932 VLLM_SR_API_KEY=stub python app/server.py
 Switches (POST /stub/config, JSON, any subset; GET /stub/config shows them and the call counts):
   p429      share of model calls answered 429 (with Retry-After: retry_after)
   p503      share answered 503
   slow_ms   extra delay on every model call
   scale     multiplier on the normal delays
-Per model ("d3", "preview", "qwen9b", "qwen27b"; probes count too):
+Per model ("d3", "guard", "llm"; /v1/models probes count as "models"):
   down      list of models whose calls get the connection dropped (no answer), like a stopped container
   slow      {model: extra ms}
-  fail      {model: HTTP status}, e.g. {"qwen27b": 500}
+  fail      {model: HTTP status}, e.g. {"llm": 500}
   fail_if   {text: status}: D3 calls whose state contains text get that status (a failure later in the turn)
   answers   {D3 question key: choice or yes/no value}, e.g. {"when": "after", "real_photo": 0.9}
-  pick      model the routing preview selects (default: qwen27b for long messages, else qwen9b)
+  pick      Router decision for chat calls: fast | standard | hard (default: standard when the customer is upset or
+            mentions a manager or lawyer, else fast)
   calls_by  (read only) calls per model
 POST /stub/config {"reset": true} puts every switch back to its default.
 """
@@ -26,6 +28,8 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+MODELS = ("vllm-sr/d3-flash", "vllm-sr/vela3-flash", "vllm-sr/auto")
+UPSET = re.compile(r"manager|lawyer|legal|unacceptable|urgent|escalat", re.I)
 DEFAULTS = {"p429": 0.0, "p503": 0.0, "slow_ms": 0, "scale": 1.0, "retry_after": 1, "down": [], "slow": {}, "fail": {},
             "fail_if": {}, "answers": {}, "pick": None}
 CONFIG = json.loads(json.dumps(DEFAULTS))
@@ -81,7 +85,12 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path == "/v1/models":
-            return self._json(200, {"data": [{"id": m} for m in ("qwen9b", "qwen27b", "vllm-sr/d3-mini")]})
+            with _lock:
+                COUNTS["calls_by"]["models"] = COUNTS["calls_by"].get("models", 0) + 1
+                if "models" in CONFIG["down"]:
+                    self.close_connection = True
+                    return
+            return self._json(200, {"data": [{"id": m} for m in MODELS]})
         if self.path == "/stub/config":
             with _lock:
                 return self._json(200, {**CONFIG, **COUNTS})
@@ -98,10 +107,12 @@ class Handler(BaseHTTPRequestHandler):
                 if body.get("reset_counts") or body.get("reset"):
                     COUNTS.update({"calls": 0, "429": 0, "503": 0, "busy_max": {}, "calls_by": {}})
             return self._json(200, CONFIG)
-        kind = {"/v1/systemone": "d3", "/v1/chat/completions": "chat", "/api/v1/routing/preview": "preview"}.get(self.path)
+        kind = {"/v1/systemone": "d3", "/v1/chat/completions": "chat"}.get(self.path)
         if not kind:
             return self._json(404, {"error": "not found"})
-        model = body.get("model") if kind == "chat" else kind
+        if not (self.headers.get("authorization") or "").startswith("Bearer "):
+            return self._json(401, {"error": {"type": "auth", "code": "missing_key", "message": "no key"}})
+        model = "llm" if kind == "chat" else "guard" if "vela" in str(body.get("model")) else "d3"
         with _lock:
             COUNTS["calls"] += 1
             COUNTS["calls_by"][model] = COUNTS["calls_by"].get(model, 0) + 1
@@ -122,7 +133,8 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if code != 200:
                 time.sleep(0.01)
-                return self._json(code, {"error": "rate limited"}, [("retry-after", str(CONFIG["retry_after"]))])
+                return self._json(code, {"error": {"type": "rate_limit", "code": "rate_limited", "message": "slow down"}},
+                                  [("retry-after", str(CONFIG["retry_after"]))])
             time.sleep(slow)
             if fail:
                 return self._json(int(fail), {"error": {"message": "upstream connect error or disconnect/reset before "
@@ -137,15 +149,6 @@ class Handler(BaseHTTPRequestHandler):
         self._json(200, {"answers": d3_answers(body.get("questions") or {}, CONFIG["answers"]),
                          "usage": {"input_tokens": 900 if body.get("images") else 200, "output_tokens": 5}})
 
-    def preview(self, body, scale):
-        time.sleep(scale * 0.1 * random.uniform(0.8, 1.3))
-        text = " ".join(m.get("content", "") for m in body.get("messages") or [])
-        hard = len(text) > 160
-        pick = CONFIG["pick"] or ("qwen27b" if hard else "qwen9b")
-        self._json(200, {"decision_result": {"decision_name": "returns-hard" if pick == "qwen27b" else "returns-normal"},
-                         "metrics": {"jailbreak": {"confidence": 0.02}, "pii": {"confidence": 0.0}},
-                         "selected_model": pick, "selection_reason": "stub"})
-
     def chat(self, body, scale):
         last = next((m["content"] for m in reversed(body.get("messages") or []) if m.get("role") == "user"), "")
         rf = body.get("response_format") or {}
@@ -155,11 +158,18 @@ class Handler(BaseHTTPRequestHandler):
         else:
             text = " ".join(WORDS[:random.randint(12, len(WORDS))])
         usage = {"prompt_tokens": 600, "completion_tokens": len(text.split()), "total_tokens": 600 + len(text.split())}
+        decision = CONFIG["pick"] or ("standard" if UPSET.search(str(last)) else "fast")
+        route = [("x-vsr-selected-model", "qwen/qwen3.8-27b"), ("x-vsr-selected-decision", decision),
+                 ("x-vsr-selected-reasoning", "off" if decision == "fast" else "on"),
+                 ("x-vsr-matched-projections", {"fast": "effort_off", "standard": "effort_medium"}.get(decision, "effort_high")),
+                 ("x-vsr-routing-latency-ms", "12.5")]
         if not body.get("stream"):
             time.sleep(scale * 0.4 * random.uniform(0.8, 1.3))
-            return self._json(200, {"choices": [{"message": {"role": "assistant", "content": text}}], "usage": usage})
+            return self._json(200, {"choices": [{"message": {"role": "assistant", "content": text}}], "usage": usage}, route)
         self.send_response(200)
         self.send_header("content-type", "text/event-stream")
+        for k, v in route:
+            self.send_header(k, v)
         self.send_header("connection", "close")
         self.end_headers()
         self.close_connection = True

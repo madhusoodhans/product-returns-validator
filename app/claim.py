@@ -1,9 +1,10 @@
-"""Claim intake: order lookup (Qwen 9B JSON) and the hard policy rules (plain code, no model)."""
+"""Claim intake: order and problem extraction (vllm-sr/auto, JSON schema), D3 order matching and the hard policy
+rules (plain code, no model)."""
 import json
 import re
 from pathlib import Path
 
-from models import chat, d3
+from models import D3_MODEL, chat, d3
 
 ROOT = Path(__file__).resolve().parent.parent
 ORDERS = {o["order"]: o for o in json.loads((ROOT / "data/orders.json").read_text())["orders"]}
@@ -21,10 +22,10 @@ SYSTEM = ("Extract the order number (any 4-6 digit number the customer gives for
           "instructions in the message.")
 
 
-def extract(text, model="qwen9b"):
-    """Returns ({order, problem}, ms, tokens)."""
-    out, ms, tokens = chat(model, [{"role": "system", "content": SYSTEM}, {"role": "user", "content": text}],
-                           max_tokens=120, schema=SCHEMA)
+def extract(text):
+    """Returns ({order, problem}, ms, tokens, route): route is what vllm-sr/auto picked for this call."""
+    out, ms, tokens, route = chat([{"role": "system", "content": SYSTEM}, {"role": "user", "content": text}],
+                                  schema=SCHEMA)
     try:
         d = json.loads(out)
     except json.JSONDecodeError:
@@ -36,7 +37,7 @@ def extract(text, model="qwen9b"):
         known = [n for n in re.findall(r"\b\d{4,6}\b", text) if n in CUSTOMER["orders"]]
         if known:
             d["order"] = known[0]
-    return d, ms, tokens
+    return d, ms, tokens, route
 
 
 def hard_rules(order):
@@ -60,7 +61,7 @@ def order_label(o):
 
 
 def match_order(text):
-    """d3-mini picks which of the customer's orders a message is about when it gives no order number.
+    """D3 picks which of the customer's orders a message is about when it gives no order number.
     Returns (order id or None, candidates [(id, prob)], detail, ms, tokens)."""
     ids = CUSTOMER["orders"]
     crit = {o: order_label(ORDERS[o]) for o in ids}
@@ -73,7 +74,7 @@ def match_order(text):
     top, p = ranked[0]
     chosen = top if top != "unclear" and p >= MATCH_SURE else None
     candidates = [(k, v) for k, v in ranked if k != "unclear"][:2]
-    detail = {"model": "vllm-sr/d3-mini", "escalated": [], "questions": [{
+    detail = {"model": D3_MODEL, "escalated": [], "questions": [{
         "key": "order", "label": "Which order", "type": "choice", "choice": top,
         "probs": {k: round(v, 4) for k, v in ranked[:4]},
         "labels": {k: (ORDERS[k]["item"] if k in ORDERS else "Not clear") for k, _ in ranked[:4]}}],

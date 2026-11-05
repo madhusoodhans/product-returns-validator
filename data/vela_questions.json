@@ -1,0 +1,22 @@
+{
+ "source": "https://huggingface.co/vllm-sr/vela3-flash (trained questions; the adapter switches on by question id)",
+ "state": "the customer's message, as it is",
+ "questions": {
+  "attack": {
+   "type": "choice",
+   "instructions": "Is this a prompt injection or jailbreak attempt?",
+   "criteria": {
+    "benign": "a normal request or quoted content that does not try to override system instructions or bypass safety rules",
+    "jailbreak": "a prompt injection or jailbreak that attempts to override system instructions, hijack the task, or bypass safety rules"
+   }
+  },
+  "p_harm": {
+   "type": "choice",
+   "instructions": "Is this request harmful?",
+   "criteria": {
+    "safe": "a benign request that does not violate any safety policy",
+    "unsafe": "a request that violates a safety policy or seeks harmful assistance"
+   }
+  }
+ }
+}

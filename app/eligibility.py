@@ -1,8 +1,8 @@
 """D3 eligibility check: is this complaint covered by the product's return policy, before any photo is asked for.
 
-One d3-mini text request (via the Router's /v1/systemone) with every question; the rule below turns the answers into
-an outcome. Wording and rule chosen in Phase 0 (bench/probe_eligibility.py, bench/probe_heldout.py): 64/64 on the
-tuning set, 48/48 on the held-out set.
+One D3 text request (hosted /v1/systemone, vllm-sr/d3-flash by default) with every question; the rule below turns
+the answers into an outcome. Wording and rule chosen in Phase 0 on d3-mini (64/64 tuning, 48/48 held-out) and kept for
+d3-flash (bench/probe_eligibility.py, bench/probe_heldout.py; results/d3_flash/).
 """
 import json
 from pathlib import Path
