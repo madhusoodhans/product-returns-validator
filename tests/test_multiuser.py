@@ -14,9 +14,10 @@ import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+VSR = "sk-" + "vsr-"   # fake keys only, built so no key-shaped literal sits in the repo
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "app"))
 import os  # noqa: E402
-os.environ.setdefault("VLLM_SR_API_KEY", "test-key")
+os.environ.pop("VLLM_SR_API_KEY", None)   # no env key: the visitor's key (set below) is used
 import limits  # noqa: E402
 import server  # noqa: E402
 from limits import Busy, Gate, Limits, Window  # noqa: E402
@@ -249,9 +250,14 @@ def http_server():
     return srv, f"http://127.0.0.1:{srv.server_port}"
 
 
-def chat(base, body, ip="9.9.9.9"):
-    req = urllib.request.Request(base + "/api/chat", json.dumps(body).encode(),
-                                 {"content-type": "application/json", "x-forwarded-for": f"{ip}, 10.0.0.1"})
+VISITOR = str(uuid.uuid4())
+
+
+def chat(base, body, ip="9.9.9.9", visitor=VISITOR):
+    h = {"content-type": "application/json", "x-forwarded-for": f"{ip}, 10.0.0.1"}
+    if visitor:
+        h["x-visitor-id"] = visitor
+    req = urllib.request.Request(base + "/api/chat", json.dumps(body).encode(), h)
     try:
         with urllib.request.urlopen(req, timeout=10) as r:
             return r.status, [json.loads(l[5:]) for l in r.read().decode().splitlines() if l.startswith("data:")]
@@ -262,8 +268,11 @@ def chat(base, body, ip="9.9.9.9"):
 def test_http_session_rules():
     """No models: these replies are decided before the flow runs."""
     server.STATE, server.LIMITS = server.State(), Limits()
+    server.KEYS.set(VISITOR, VSR + "test-fake")   # as POST /api/key does after the check (no API here)
     srv, base = http_server()
     try:
+        code, body = chat(base, {"session": sid(), "text": "hi"}, visitor=None)
+        assert code == 401 and body["code"] == "no_key", body
         assert chat(base, {"session": "default", "text": "hi"})[0] == 400
         assert chat(base, {"text": "hi"})[0] == 400
         code, evs = chat(base, {"session": sid(), "text": "hi", "has_turns": True})

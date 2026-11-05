@@ -15,10 +15,13 @@ import uuid
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-os.environ["VLLM_SR_API_KEY"] = "test-key"   # the stub only checks that a bearer token is sent
+os.environ.pop("VLLM_SR_API_KEY", None)   # no env key: every call uses the visitor's key (keys.CURRENT)
+VSR = "sk-" + "vsr-"   # fake keys only, built so no key-shaped literal sits in the repo
+FAKE_KEY = VSR + "test-fake"            # the stub accepts any key without "invalid", "quota", ... in it
 sys.path.insert(0, str(ROOT / "app"))
 sys.path.insert(0, str(ROOT / "bench"))
 import availability  # noqa: E402
+import keys  # noqa: E402
 import models  # noqa: E402
 import reply  # noqa: E402
 import server  # noqa: E402
@@ -32,6 +35,9 @@ STUB = stub_models.Server(("127.0.0.1", 0), stub_models.Handler)
 threading.Thread(target=STUB.serve_forever, daemon=True).start()
 URL = f"http://127.0.0.1:{STUB.server_port}"
 models.API_BASE = URL
+keys.API_BASE = URL
+keys.CURRENT.set(FAKE_KEY)   # the flow tests below run turns in this thread, as the server does for a visitor
+VISITOR = str(uuid.uuid4())
 TIMEOUTS = dict(availability.TIMEOUT)
 NO_APPROVAL = {"says": "other"}   # the stub's D3 would otherwise read every reply as an approval
 CRACKED = "Order 4411, the phone screen was cracked when I opened the box."
@@ -174,14 +180,14 @@ def test_at_most_four_images_per_request():
 
 
 def test_missing_key_is_a_clear_error():
-    key = os.environ.pop("VLLM_SR_API_KEY")
+    token = keys.CURRENT.set(None)
     try:
         models.api_key()
         raise AssertionError("should raise")
-    except models.MissingKey as e:
-        assert "VLLM_SR_API_KEY" in str(e)
+    except keys.NoKey as e:
+        assert e.code == "no_key" and "API key" in e.text
     finally:
-        os.environ["VLLM_SR_API_KEY"] = key
+        keys.CURRENT.reset(token)
 
 
 # ---------------------------------------------------------------------------------------------- flow
@@ -375,8 +381,17 @@ def http_server():
     return srv, f"http://127.0.0.1:{srv.server_port}"
 
 
+def set_key(base, key=FAKE_KEY, visitor=VISITOR):
+    """The browser flow: POST /api/key with the visitor id (validated against the stub)."""
+    req = urllib.request.Request(base + "/api/key", json.dumps({"key": key}).encode(),
+                                 {"content-type": "application/json", "x-visitor-id": visitor})
+    with urllib.request.urlopen(req, timeout=10) as r:
+        assert json.loads(r.read()) == {"ok": True}
+
+
 def post(base, body):
-    req = urllib.request.Request(base + "/api/chat", json.dumps(body).encode(), {"content-type": "application/json"})
+    req = urllib.request.Request(base + "/api/chat", json.dumps(body).encode(),
+                                 {"content-type": "application/json", "x-visitor-id": VISITOR})
     with urllib.request.urlopen(req, timeout=30) as r:
         return r.read().decode()
 
@@ -394,6 +409,8 @@ def test_no_raw_error_text_reaches_the_client():
     srv, base = http_server()
     seen = []
     try:
+        stub(reset=True)
+        set_key(base)
         modes = [dict(down=["llm"]), dict(fail={"llm": 500}), dict(down=["guard"]), dict(fail={"guard": 502}),
                  dict(fail_if={"Return policy covers": 500}), dict(slow={"d3": 600}), dict(fail={"d3": 500}),
                  dict(down=["d3", "llm", "guard", "models"]), dict(p503=1.0, retry_after=0)]

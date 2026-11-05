@@ -12,6 +12,8 @@ from email.utils import parsedate_to_datetime
 
 import requests
 
+import keys
+
 SLOTS = min(12, int(os.environ.get("MODEL_SLOTS", "12")))  # calls at once per API kind (a hosted key allows 16 chats)
 QUEUE = int(os.environ.get("MODEL_QUEUE", "100"))     # calls waiting for a slot per kind; more -> Busy at once
 WAIT_S = float(os.environ.get("MODEL_WAIT_S", "15"))  # longest wait for a slot
@@ -94,28 +96,34 @@ def retry_after(r, cap=RETRY_CAP_S):
 
 
 COOLDOWN_CAP_S = 60.0
-_cool = {}   # kind -> time until which the API asked us to wait (Retry-After of a 429)
+_cool = {}   # (kind, key id) -> time until which the API asked us to wait (Retry-After of a 429): per key, as the
+# hosted limits are per key and every visitor brings their own
 
 
 @contextmanager
 def post(kind, url, **kw):
     """requests.post through the gate of `kind`, holding the slot until the response is consumed. A 429/503 is retried
     once after Retry-After when that is at most RETRY_CAP_S; a second one, or a longer wait, raises Busy. While a 429's
-    Retry-After runs, other calls of the same kind wait for it (short) or raise Busy at once without a request (long)."""
-    left = _cool.get(kind, 0) - time.time()
+    Retry-After runs, other calls of the same kind with the same key wait for it (short) or raise Busy at once without a
+    request (long). A response refused because of the key (401, 403, 429 quota) raises keys.KeyFailed: never retried."""
+    cool = (kind, keys.key_id())
+    left = _cool.get(cool, 0) - time.time()
     if left > RETRY_CAP_S:
         raise Busy(f"{GATES[kind].name}: rate limited, retry after {left:.0f} s", 429)
     if left > 0:
         time.sleep(left)   # a short Retry-After: wait it out, as the call that got the 429 does
     for attempt in (0, 1):
         with GATES[kind], requests.post(url, **kw) as r:
+            failed = keys.key_failure(r)
+            if failed:
+                raise failed
             if r.status_code not in THROTTLED:
                 yield r
                 return
             code, wait = r.status_code, retry_after(r, COOLDOWN_CAP_S)
         _note_throttled()
         if code == 429 and r.headers.get("retry-after"):
-            _cool[kind] = max(_cool.get(kind, 0), time.time() + wait)
+            _cool[cool] = max(_cool.get(cool, 0), time.time() + wait)
         if attempt == 0 and wait <= RETRY_CAP_S:
             time.sleep(wait)
             continue

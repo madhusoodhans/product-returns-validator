@@ -1,6 +1,7 @@
 """Returns photo check demo server (127.0.0.1:8602): the docs/API.md contract over app/flow.py, and the built page.
 
-Models: the hosted vllm-sr API (VLLM_SR_API_BASE, default https://app.vllm-sr.ai) with the key in VLLM_SR_API_KEY.
+Models: the hosted vllm-sr API (VLLM_SR_API_BASE, default https://app.vllm-sr.ai) with each visitor's own key, entered
+in the page (keys.py, docs/API.md "API key"); VLLM_SR_API_KEY is an optional fallback, off by default.
 
 Many visitors at once: chats are kept in memory with limits (State, limits.py); see docs/API.md "Many visitors".
 
@@ -18,11 +19,12 @@ import traceback
 from collections import OrderedDict, deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import parse_qs, unquote, urlparse, urlsplit
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import availability  # noqa: E402
 import claim  # noqa: E402
+import keys  # noqa: E402
 import models  # noqa: E402
 from flow import NODES, Session, failed_steps  # noqa: E402
 from limits import BUSY_TEXT, COUNTS, GATES, Busy, Limits, start_turn  # noqa: E402
@@ -41,6 +43,15 @@ MAX_BODY = 25_000_000   # a base64 phone photo is ~4-8 MB
 HOST = os.environ.get("HOST", "127.0.0.1")
 PLAY_ALL = os.environ.get("PLAY_ALL", "1") != "0"
 LANDING_URL = os.environ.get("LANDING_URL", "")   # "All demos" link in the top bar; empty hides it
+
+
+def _origin(url):
+    u = urlsplit(url or "")
+    return f"{u.scheme}://{u.netloc}" if u.scheme and u.netloc else None
+
+
+# CORS for POST /api/key/check only: the landing page checks a key through this backend (the hosted API sends no CORS)
+KEY_CHECK_ORIGINS = {o for o in (_origin(LANDING_URL), "http://localhost:8630", "http://127.0.0.1:8630") if o}
 MAX_CHATS, IDLE_S, PHOTO_S = 300, 30 * 60, 10 * 60
 MAX_ACTIVE = 50          # chats mid-turn at once
 UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
@@ -165,8 +176,11 @@ class State:
 
 STATE = State()
 LIMITS = Limits()
+KEYS = keys.Store()           # visitor id -> the visitor's API key, in memory only
+KEY_ATTEMPTS = keys.Attempts()
 ACTIVE = threading.BoundedSemaphore(MAX_ACTIVE)   # chats mid-turn
-METRICS = {"active": 0, "busy": 0, "rate_limited": 0, "expired": 0, "unavailable": 0, "errors": 0,
+METRICS = {"active": 0, "busy": 0, "rate_limited": 0, "expired": 0, "unavailable": 0, "errors": 0, "key_failed": 0,
+           "no_key": 0,
            "turns": deque()}   # turns: end times
 _metrics_lock = threading.Lock()
 
@@ -197,6 +211,8 @@ def sweeper():
         time.sleep(30)
         STATE.sweep()
         LIMITS.sweep()
+        KEYS.sweep()
+        KEY_ATTEMPTS.sweep()
 
 
 def log_turn(sid, verdict, t0, calls, throttled):
@@ -263,12 +279,14 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, *args):
         pass
 
-    def _json(self, code, body, close=False):
+    def _json(self, code, body, close=False, cors=False):
         data = json.dumps(body).encode()
         self.send_response(code)
         self.send_header("content-type", "application/json")
         self.send_header("content-length", str(len(data)))
         self.send_header("cache-control", "no-store")
+        if cors:
+            self._cors()
         if close:   # the request body was not read: the connection cannot carry another request
             self.send_header("connection", "close")
             self.close_connection = True
@@ -284,6 +302,34 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("content-length", str(len(data)))
         self.end_headers()
         self.wfile.write(data)
+
+    def _cors(self):
+        """Allow the landing page's origin (POST /api/key/check only)."""
+        origin = self.headers.get("origin")
+        self.send_header("vary", "Origin")
+        if origin in KEY_CHECK_ORIGINS:
+            self.send_header("access-control-allow-origin", origin)
+            self.send_header("access-control-allow-methods", "POST, OPTIONS")
+            self.send_header("access-control-allow-headers", "content-type")
+            self.send_header("access-control-max-age", "600")
+
+    def visitor(self):
+        """This tab's visitor id (X-Visitor-Id, a UUID the page keeps in sessionStorage), or None."""
+        v = (self.headers.get("x-visitor-id") or "").strip().lower()
+        return v if UUID.match(v) else None
+
+    def key_state(self):
+        v = self.visitor()
+        return {"set": KEYS.has(v), "server_key": keys.env_key() is not None, "failed": KEYS.failure(v)}
+
+    def do_OPTIONS(self):
+        path = urlparse(self.path).path
+        if path != "/api/key/check":
+            return self._json(404, {"error": "not found"})
+        self.send_response(204)
+        self._cors()
+        self.send_header("content-length", "0")
+        self.end_headers()
 
     def client_ip(self):
         """The visitor's address for the per-IP limits. TRUST_PROXY=N (behind N proxies, a Space: 1): the N-th
@@ -311,7 +357,9 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(200, metrics())
         if path == "/api/config":
             return self._json(200, {"play_all": PLAY_ALL, "landing_url": LANDING_URL,
-                                    "health": availability.health()})
+                                    "health": availability.health(), "key": self.key_state()})
+        if path == "/api/key":   # never the key or any part of it
+            return self._json(200, self.key_state())
         if path == "/api/samples":
             return self._json(200, samples())
         if path == "/api/customer":
@@ -337,24 +385,40 @@ class Handler(BaseHTTPRequestHandler):
             p = WEB / "index.html"
         return self._file(p)
 
-    def do_POST(self):
-        path = urlparse(self.path).path
-        if path != "/api/chat":
-            return self._json(404, {"error": "not found"}, close=True)
+    def _read_json(self, max_body=MAX_BODY, cors=False):
+        """The request body as a dict, or None after answering the error."""
         try:
             length = int(self.headers.get("content-length") or 0)
         except ValueError:
             length = -1
         if length < 0:
-            return self._json(400, {"error": "bad content-length"}, close=True)
-        if length > MAX_BODY:   # checked before reading anything
-            return self._json(413, {"error": f"upload too large (max {MAX_BODY // 1_000_000} MB)"}, close=True)
+            return self._json(400, {"error": "bad content-length"}, close=True, cors=cors)
+        if length > max_body:   # checked before reading anything
+            return self._json(413, {"error": f"upload too large (max {max(1, max_body // 1_000_000)} MB)"}, close=True,
+                              cors=cors)
         try:
             req = json.loads(self.rfile.read(length) or b"{}")
         except ValueError:
             req = None
         if not isinstance(req, dict):
-            return self._json(400, {"error": "bad json"})
+            return self._json(400, {"error": "bad json"}, cors=cors)
+        return req
+
+    def do_DELETE(self):
+        if urlparse(self.path).path != "/api/key":
+            return self._json(404, {"error": "not found"})
+        KEYS.delete(self.visitor())
+        return self._json(200, {"ok": True})
+
+    def do_POST(self):
+        path = urlparse(self.path).path
+        if path in ("/api/key/check", "/api/key"):
+            return self._key(path)
+        if path != "/api/chat":
+            return self._json(404, {"error": "not found"}, close=True)
+        req = self._read_json()
+        if req is None:
+            return
         sid, text, image = str(req.get("session") or "").lower(), req.get("text"), req.get("image")
         if not UUID.match(sid):
             return self._json(400, {"error": "session must be a UUID"})
@@ -363,6 +427,13 @@ class Handler(BaseHTTPRequestHandler):
         image = image if isinstance(image, str) and image else None
         if not (text or image or action):
             return self._json(400, {"error": "text, image or action required"})
+        visitor = self.visitor()
+        key = KEYS.get(visitor) or keys.env_key()
+        if not key:   # nothing runs without a key
+            note("no_key")
+            failed = KEYS.failure(visitor)
+            return self._json(401, {"code": "no_key", "message": keys.message("no_key"), "failed": failed,
+                                    "error": keys.message("no_key")})
         self.send_response(200)
         self.send_header("content-type", "text/event-stream")
         self.send_header("cache-control", "no-store")
@@ -371,15 +442,39 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.close_connection = True
         try:
-            self._chat(sid, text, image, action, bool(req.get("has_turns")))
+            keys.CURRENT.set(key)   # this request's thread (and the flow's worker threads, which copy the context)
+            self._chat(sid, text, image, action, bool(req.get("has_turns")), visitor)
         except (BrokenPipeError, ConnectionResetError, TimeoutError):
             pass
+        finally:
+            keys.CURRENT.set(None)
+
+    def _key(self, path):
+        """POST /api/key/check (validate only, CORS for the landing page) and POST /api/key (validate, then keep it for
+        this visitor). Answers {"ok": true} or {"ok": false, "code", "message"}; the key is never echoed or logged."""
+        check = path == "/api/key/check"
+        req = self._read_json(max_body=4096, cors=check)
+        if req is None:
+            return
+        visitor = self.visitor()
+        if not check and not visitor:
+            return self._json(400, {"ok": False, "code": "error", "message": "Missing visitor id."})
+        if not KEY_ATTEMPTS.allow(visitor, self.client_ip() or ("local" if not visitor else None)):
+            code = "too_many_checks"
+            return self._json(429, {"ok": False, "code": "rate_limited", "message": keys.message(code)}, cors=check)
+        ok, code, msg = keys.validate(req.get("key"))
+        print(f"key {'check' if check else 'set'} {'ok' if ok else code}", flush=True)
+        if not ok:
+            return self._json(keys.HTTP_STATUS.get(code, 400), {"ok": False, "code": code, "message": msg}, cors=check)
+        if not check:
+            KEYS.set(visitor, req["key"])
+        return self._json(200, {"ok": True}, cors=check)
 
     def _send(self, ev):
         self.wfile.write(f"data: {json.dumps(ev)}\n\n".encode())
         self.wfile.flush()
 
-    def _chat(self, sid, text, image, action, has_turns):
+    def _chat(self, sid, text, image, action, has_turns, visitor=None):
         chat = STATE.get(sid)
         if chat is None and has_turns:   # the server restarted or dropped this chat
             note("expired")
@@ -400,12 +495,12 @@ class Handler(BaseHTTPRequestHandler):
         try:
             chat = chat or STATE.get(sid, create=True)
             with chat.lock:
-                self._turn(chat, text, image, action)
+                self._turn(chat, text, image, action, visitor)
         finally:
             note("active", -1)
             ACTIVE.release()
 
-    def _turn(self, chat, text, image, action):
+    def _turn(self, chat, text, image, action, visitor=None):
         session, sid = chat.session, chat.session.sid
         t0, counts = time.perf_counter(), start_turn()
         verdict, calls, nodes = None, [], {}
@@ -425,6 +520,16 @@ class Handler(BaseHTTPRequestHandler):
                     self._send({"type": "stats", **STATE.stats(sid)})
                     ev = {"type": "done", "turn": ev["turn"]}
                 self._send(ev)
+        except keys.KeyFailed as e:   # the visitor's key was refused: stop the turn and say so (no template reply)
+            verdict = f"key_failed ({e.code})"
+            note("key_failed")
+            KEYS.fail(visitor, e.code)
+            try:
+                for ev in failed_steps(nodes, "Stopped: the API key was refused"):
+                    self._send(ev)
+                self._send({"type": "key_error", "code": e.code, "message": e.text})
+            except OSError:
+                pass
         except Busy as e:   # no model capacity: a capacity step in the flow and a polite reply, not a crash
             verdict = f"busy ({e})"
             note("busy")
@@ -456,12 +561,10 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    try:
-        models.api_key()
-    except models.MissingKey as e:
-        sys.exit(f"error: {e}")
+    keys.guard_logs()   # anything shaped like a key is printed as sk-***
     print(f"models: {models.D3_MODEL}, {models.GUARD_MODEL}, {models.LLM_MODEL} on {models.API_BASE}", flush=True)
-    print(f"returns validator demo on http://{HOST}:{PORT} (play all: {PLAY_ALL})", flush=True)
+    print(f"returns validator demo on http://{HOST}:{PORT} (play all: {PLAY_ALL}; API key: "
+          f"{'env key as fallback' if keys.env_key() else 'entered in the browser'})", flush=True)
     threading.Thread(target=sweeper, daemon=True).start()
     availability.start_probes()
     Server((HOST, PORT), Handler).serve_forever()

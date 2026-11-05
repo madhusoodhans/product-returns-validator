@@ -2,7 +2,8 @@
 (`vllm-sr/auto`: the Router picks the model and the reasoning effort per request).
 
 Every call goes through availability.call (circuit breaker, plain-word failures) with its per-model timeout and through
-a limits.py slot. The API key comes from env VLLM_SR_API_KEY only; it is sent as a bearer token and never logged.
+a limits.py slot. The API key is the visitor's own (keys.current(): set per turn by the server; the optional env key
+VLLM_SR_API_KEY otherwise); it is sent as a bearer token and never logged. No key: keys.NoKey before any request.
 Model names and the API base are set by env (defaults: the hosted ones).
 """
 import base64
@@ -14,6 +15,7 @@ from pathlib import Path
 
 from PIL import Image, ImageOps
 
+import keys
 from availability import Unavailable, call, timeout as model_timeout
 from limits import Busy, Gate, post
 
@@ -26,16 +28,12 @@ MAX_IMAGE_BYTES = 8_000_000  # per image, decoded
 ROOT = Path(__file__).resolve().parent.parent
 
 
-class MissingKey(RuntimeError):
-    pass
+MissingKey = keys.NoKey
 
 
 def api_key():
-    k = os.environ.get("VLLM_SR_API_KEY", "").strip()
-    if not k:
-        raise MissingKey("VLLM_SR_API_KEY is not set: the demo needs a vllm-sr API key (https://app.vllm-sr.ai). "
-                         "Set it in the environment (on a Hugging Face Space: as a Space secret).")
-    return k
+    """The key for a call now (the visitor's, else the optional env key); raises keys.NoKey."""
+    return keys.current()
 
 
 def headers(debug=False):

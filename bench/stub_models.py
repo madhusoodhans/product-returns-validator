@@ -18,6 +18,11 @@ Per model ("d3", "guard", "llm"; /v1/models probes count as "models"):
   pick      Router decision for chat calls: fast | standard | hard (default: standard when the customer is upset or
             mentions a manager or lawyer, else fast)
   calls_by  (read only) calls per model
+  key_error [status, code]: every model call answers this error (a key revoked or out of quota mid-chat)
+API keys: the bearer token picks the answer, as the hosted API would for such a key (fake keys only):
+  contains "invalid" -> 401 invalid_api_key, "disabled" -> 403 key_disabled, "quota" -> 429 quota_exceeded,
+  "ratelim" -> 429 rate_limit_exceeded (Retry-After 7), "slowkey" -> no answer for 40 s (a timeout), sk-pt- -> 403
+  model_not_allowed on /v1/systemone; anything else works.
 POST /stub/config {"reset": true} puts every switch back to its default.
 """
 import argparse
@@ -31,7 +36,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 MODELS = ("vllm-sr/d3-flash", "vllm-sr/vela3-flash", "vllm-sr/auto")
 UPSET = re.compile(r"manager|lawyer|legal|unacceptable|urgent|escalat", re.I)
 DEFAULTS = {"p429": 0.0, "p503": 0.0, "slow_ms": 0, "scale": 1.0, "retry_after": 1, "down": [], "slow": {}, "fail": {},
-            "fail_if": {}, "answers": {}, "pick": None}
+            "fail_if": {}, "answers": {}, "pick": None, "key_error": None}
 CONFIG = json.loads(json.dumps(DEFAULTS))
 COUNTS = {"calls": 0, "429": 0, "503": 0, "busy_now": {}, "busy_max": {}, "calls_by": {}}
 _lock = threading.Lock()
@@ -65,6 +70,18 @@ def fill(schema, text):
     if "enum" in schema:
         return schema["enum"][0]
     return {"string": text[:200], "number": 0, "integer": 0, "boolean": False, "array": []}.get(t)
+
+
+def key_refusal(token, kind):
+    """(status, code) for a fake test key that the hosted API would refuse, else None."""
+    for part, out in (("invalid", (401, "invalid_api_key")), ("disabled", (403, "key_disabled")),
+                      ("quota", (429, "quota_exceeded")), ("ratelim", (429, "rate_limit_exceeded")),
+                      ("slowkey", (0, "slow"))):
+        if part in token:
+            return out
+    if token.startswith("sk-pt-") and kind == "d3":
+        return 403, "model_not_allowed"
+    return None
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -110,8 +127,18 @@ class Handler(BaseHTTPRequestHandler):
         kind = {"/v1/systemone": "d3", "/v1/chat/completions": "chat"}.get(self.path)
         if not kind:
             return self._json(404, {"error": "not found"})
-        if not (self.headers.get("authorization") or "").startswith("Bearer "):
-            return self._json(401, {"error": {"type": "auth", "code": "missing_key", "message": "no key"}})
+        auth = self.headers.get("authorization") or ""
+        if not auth.startswith("Bearer "):
+            return self._json(401, {"error": {"type": "auth", "code": "missing_api_key", "message": "no key"}})
+        refused = key_refusal(auth[7:], kind) or CONFIG["key_error"]
+        if refused:
+            status, code = refused
+            if code == "slow":
+                time.sleep(40)
+                self.close_connection = True
+                return
+            return self._json(status, {"error": {"type": "auth", "code": code, "message": "refused"}},
+                              [("retry-after", "7")] if status == 429 else ())
         model = "llm" if kind == "chat" else "guard" if "vela" in str(body.get("model")) else "d3"
         with _lock:
             COUNTS["calls"] += 1

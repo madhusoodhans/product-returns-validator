@@ -1,5 +1,6 @@
 # Hugging Face Space (Docker SDK): the demo server and the committed page, no models. Every model call goes to the
-# hosted vllm-sr API: add VLLM_SR_API_KEY as a Space secret (never as a variable or in this file). TRUST_PROXY=1 makes
+# hosted vllm-sr API with the key each visitor enters in the page (VLLM_SR_API_KEY is an optional fallback: if you set
+# one, only as a Space secret, never as a variable or in this file). TRUST_PROXY=1 makes
 # the per-visitor limits use the client address the Space proxy forwards.
 FROM python:3.12-slim
 

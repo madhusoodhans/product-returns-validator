@@ -6,8 +6,8 @@ Models: "d3" (D3 on /v1/systemone), "guard" (the Vela guardrail on /v1/systemone
   failure; FAILS failures in a row mark the model down for BREAK_S seconds, and calls to it are then refused at once
   (Unavailable, no request sent). One success marks it up again. 429s and full slots (limits.Busy) are capacity, not
   failures.
-- `start_probes()` checks the API every HEALTH_INTERVAL seconds with one GET /v1/models (no model call, no quota per
-  visitor): the API answers and lists the configured models. A model that is down is probed again when its breaker
+- `start_probes()` checks the API every HEALTH_INTERVAL seconds with one GET /v1/models (public: no key, no model
+  call, no quota): the API answers and lists the configured models. A model that is down is probed again when its breaker
   ends. Probes do not take model-call slots; real calls keep the tracker current in between.
 - The flow asks `available(name)` before it relies on a model; the reasons the customer can see are plain words
   ("unavailable", "timed out"); exception text only goes to the server log.
@@ -19,6 +19,7 @@ from contextlib import contextmanager
 
 import requests
 
+from keys import KeyFailed
 from limits import Busy
 
 NAMES = ("d3", "guard", "llm")
@@ -141,6 +142,8 @@ def call(name):
         raise Unavailable(name, "unavailable")
     try:
         yield
+    except KeyFailed:   # the visitor's key, not the model: not a failure, no template reply
+        raise
     except Unavailable as e:   # raised by the call itself (a stream over its time limit)
         TRACKER.failure(name, e.reason, str(e))
         raise
@@ -166,11 +169,11 @@ def model_ids():
 
 
 def probe_models():
-    """One GET /v1/models (no model call, no quota): {name: (ok, reason, detail)} for every model. A model the API
+    """One GET /v1/models (public, no key: no model call, no quota): {name: (ok, reason, detail)} for every model. A model the API
     does not list is "not offered" (a wrong model name in the environment, or a key without access)."""
     import models
     try:
-        r = requests.get(f"{models.API_BASE}/v1/models", headers=models.headers(), timeout=timeout("probe"))
+        r = requests.get(f"{models.API_BASE}/v1/models", timeout=timeout("probe"))   # public: no visitor key needed
         if r.status_code == 429:
             return {n: (True, None, "429: up but throttled") for n in NAMES}
         if r.status_code in (401, 403):
