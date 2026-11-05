@@ -1,0 +1,38 @@
+/* API key control in the top bar (KeyMenu.tsx). Lives on the dark slate bar, so it uses the bar's redefined Arc tokens. */
+
+/* No key yet: an accent pill, the one loud control in the bar. */
+.enter {
+  flex: none; display: inline-flex; align-items: center; gap: var(--space-2); min-height: var(--control-height-sm); padding: 0 var(--space-3);
+  border: 1px solid transparent; border-radius: var(--radius-pill); background: var(--accent); color: var(--accent-foreground, #fff);
+  font: inherit; font-size: var(--text-sm); font-weight: 500; white-space: nowrap; cursor: pointer; -webkit-tap-highlight-color: transparent;
+  transition: background var(--duration-fast) var(--ease-standard);
+}
+@media (hover: hover) and (pointer: fine) { .enter:hover { background: color-mix(in oklch, var(--accent) 88%, var(--foreground)); } }
+
+/* Key set (or being checked): a quiet icon button, the same size and shape as the icon-only theme switch next to it. */
+.icon {
+  position: relative; flex: none; display: inline-grid; place-items: center;
+  width: 38px; height: 38px; padding: 0;
+  border: 1px solid var(--border); border-radius: 12px; background: var(--surface); color: var(--text-secondary);
+  font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparent;
+  transition: border-color var(--duration-fast) var(--ease-standard), background var(--duration-fast) var(--ease-standard), color var(--duration-fast) var(--ease-standard);
+}
+@media (hover: hover) and (pointer: fine) { .icon:not([aria-disabled]):hover { border-color: var(--border-strong); background: var(--surface-muted); color: var(--foreground); } }
+.icon[data-state="open"] { border-color: var(--border-strong); background: var(--surface-muted); color: var(--foreground); }
+.icon[aria-disabled] { cursor: default; color: var(--text-muted); }
+
+/* Success dot on the key: a flat --success dot cut out of the button with the surface colour (no glow). */
+.dot {
+  position: absolute; top: 7px; right: 7px; width: 7px; height: 7px; border-radius: 50%;
+  background: var(--success); box-shadow: 0 0 0 2px var(--surface);
+}
+.icon[data-state="open"] .dot { box-shadow: 0 0 0 2px var(--surface-muted); }
+@media (hover: hover) and (pointer: fine) { .icon:hover .dot { box-shadow: 0 0 0 2px var(--surface-muted); } }
+
+.spinner { animation: spin .9s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+@media (prefers-reduced-motion: reduce) {
+  .enter, .icon { transition: none; }
+  .spinner { animation: none; }
+}

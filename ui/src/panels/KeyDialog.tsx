@@ -23,6 +23,11 @@ export function KeyDialog({ open, onOpenChange, onSubmit, error, canClose }: {
   const [checking, setChecking] = useState(false);
   const [result, setResult] = useState<KeyResult | null>(null);
   const input = useRef<HTMLInputElement>(null);
+  // Focus goes back to whatever opened the dialog (the top-bar key icon, or a "Change key" button), when it is still there.
+  const returnTo = useRef<HTMLElement | null>(null);
+  const wasOpen = useRef(false);
+  if (open && !wasOpen.current) returnTo.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  wasOpen.current = open;
 
   useEffect(() => {
     if (open) { setResult(null); setValue(""); setShow(false); }
@@ -43,7 +48,10 @@ export function KeyDialog({ open, onOpenChange, onSubmit, error, canClose }: {
   const shownError = result && !result.ok ? result.message : !result ? error : null;
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className={styles.dialog} title={canClose ? "Change API key" : "Enter your API key"}
+      <DialogContent className={styles.dialog} onCloseAutoFocus={(e) => {
+        const el = returnTo.current;
+        if (el && el.isConnected && el !== document.body) { e.preventDefault(); el.focus(); }
+      }} title={canClose ? "Change API key" : "Enter your API key"}
         description="Every model call in this demo runs on your vllm-sr key. It stays in this browser tab and in the demo server's memory, never on disk.">
         <form className={styles.form} onSubmit={submit} noValidate>
           <label className={styles.label} htmlFor="vsr-key">vllm-sr API key</label>

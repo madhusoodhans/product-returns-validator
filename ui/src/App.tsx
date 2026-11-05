@@ -3,7 +3,7 @@ import { useCallback, useEffect, useState } from "react";
 import type { Theme } from "./components/arc/theme-switch/theme-switch";
 import { errText, getConfig, getHealth, getSamples, type Health, type Samples as SamplesData } from "./api";
 import { useDemo } from "./useDemo";
-import { forgetStoredKey, getKeyState, sendKey, storeKey, storedKey, type KeyResult } from "./key";
+import { deleteKey, forgetStoredKey, getKeyState, sendKey, storeKey, storedKey, type KeyResult } from "./key";
 import { KeyDialog } from "./panels/KeyDialog";
 import { TopBar } from "./panels/TopBar";
 import { Samples } from "./panels/Samples";
@@ -80,7 +80,12 @@ function useApiKey() {
     setStatus("none");
     setError(message);
   }, []);
-  return { status, ready: status === "ready", error, dialog, setDialog, submit, recover, failed };
+  /** "Forget key" in the top bar: DELETE /api/key and clear sessionStorage, then the no-key state (actions disabled, no dialog). */
+  const forget = useCallback(async () => {
+    await deleteKey();
+    setStatus("none"); setError(null);
+  }, []);
+  return { status, ready: status === "ready", error, dialog, setDialog, submit, recover, failed, forget };
 }
 
 export function App() {
@@ -103,7 +108,7 @@ export function App() {
   return (
     <div className={styles.shell}>
       <TopBar stats={demo.stats} health={health} theme={theme} onTheme={setTheme} landingUrl={landingUrl}
-        keyStatus={key.status} onChangeKey={() => key.setDialog(true)} />
+        keyStatus={key.status} busy={demo.busy || !!demo.playing} onChangeKey={() => key.setDialog(true)} onForgetKey={key.forget} />
       <div className={styles.body}>
         <Samples groups={samples.groups} error={samplesError} playing={demo.playing} outcomes={demo.outcomes} usedReasoning={demo.usedReasoning} playAll={playAll}
           disabled={!key.ready} hint={keyHint}
