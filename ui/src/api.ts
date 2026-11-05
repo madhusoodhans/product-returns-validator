@@ -1,4 +1,6 @@
-/* Types and I/O for the returns-check API (docs/API.md). All paths are relative: same origin as the page. */
+/* Types and I/O for the returns-check API (docs/API.md). All paths are relative: same origin as the page. Every request
+ * carries X-Visitor-Id: the server runs this visitor's turns with the API key they entered (key.ts). */
+import { visitorId } from "./key";
 
 export type Verdict =
   | "accept" | "retake" | "mismatch" | "no_damage" | "not_eligible" | "human" | "clarify" | "blocked" | "need_photo" | "need_order"
@@ -100,6 +102,8 @@ export type ChatEvent =
   | { type: "done"; turn: string }
   /** The server no longer knows this chat (restarted or dropped it): start a new one. */
   | { type: "expired"; message: string }
+  /** The visitor's API key was refused during the turn (invalid, disabled, quota): the turn stopped, no reply. */
+  | { type: "key_error"; code: string; message: string }
   | { type: "error"; message: string };
 
 const JSON_TIMEOUT_MS = 8000;
@@ -107,7 +111,7 @@ const JSON_TIMEOUT_MS = 8000;
 async function getJson<T>(path: string): Promise<T> {
   let r: Response;
   try {
-    r = await fetch(path, { cache: "no-store", signal: AbortSignal.timeout(JSON_TIMEOUT_MS) });
+    r = await fetch(path, { cache: "no-store", headers: { "X-Visitor-Id": visitorId() }, signal: AbortSignal.timeout(JSON_TIMEOUT_MS) });
   } catch (e) {
     if ((e as Error)?.name === "TimeoutError") throw new Error(`The demo server did not answer within ${JSON_TIMEOUT_MS / 1000} s`);
     if (e instanceof TypeError) throw new Error("Cannot reach the demo server");
@@ -132,7 +136,7 @@ export interface Health {
 }
 export const getHealth = () => getJson<Health>("api/health");
 /** GET /api/config: `play_all` false hides Play all (hosted copy); `landing_url` is the page of all demos ("" hides the link). */
-export type Config = { play_all?: boolean; landing_url?: string };
+export type Config = { play_all?: boolean; landing_url?: string; key?: { set: boolean; server_key?: boolean; failed?: string | null } };
 export const getConfig = () => getJson<Config>("api/config");
 export const getGallery = () => getJson<GalleryItem[]>("api/gallery");
 export const getStats = (session: string) => getJson<Stats>(`api/stats?session=${encodeURIComponent(session)}`);
@@ -142,6 +146,11 @@ export const getTurn = (turn: string) =>
     (Array.isArray(d) ? d : d.steps ?? d.events ?? []).filter((e) => e && e.type === "step"),
   );
 
+/** An error answer with a `code` (401 no_key: this visitor has no key on the server). */
+export class ApiError extends Error {
+  constructor(message: string, public code?: string) { super(message); }
+}
+
 /** POST /api/chat and feed each SSE event to onEvent. Resolves when the stream ends. */
 export async function streamChat(
   /** `has_turns`: this chat already had a turn, so an unknown session is an expired chat, not a new one. */
@@ -150,13 +159,14 @@ export async function streamChat(
   signal?: AbortSignal,
 ): Promise<void> {
   const r = await fetch("api/chat", {
-    method: "POST", body: JSON.stringify(body), headers: { "Content-Type": "application/json" }, signal, cache: "no-store",
+    method: "POST", body: JSON.stringify(body), headers: { "Content-Type": "application/json", "X-Visitor-Id": visitorId() }, signal, cache: "no-store",
   });
   if (!r.ok || !r.body) {
     const text = await r.text().catch(() => "");
     let detail = text;
-    try { const j = JSON.parse(text); detail = j.error || j.detail || text; } catch { /* plain text */ }
-    throw new Error(detail || `${r.status} ${r.statusText}`);
+    let code: string | undefined;
+    try { const j = JSON.parse(text); detail = j.message || j.error || j.detail || text; code = j.code; } catch { /* plain text */ }
+    throw new ApiError(detail || `${r.status} ${r.statusText}`, code);
   }
   const reader = r.body.getReader();
   const decoder = new TextDecoder();

@@ -27,12 +27,14 @@ function diffText(sc: Scenario, got: Outcomes[string]) {
   }).join("\n");
 }
 
-export function Samples({ groups, error, playing, outcomes, usedReasoning, playAll, onPlay, onPlayAll, onStop }: {
+export function Samples({ groups, error, playing, outcomes, usedReasoning, playAll, disabled, hint, onPlay, onPlayAll, onStop }: {
   groups: Group[]; error: string | null; playing: Playing | null; outcomes: Outcomes;
   /** What the last run of each scenario did; before a run the badge follows `uses_reasoning` from the bench. */
   usedReasoning: UsedReasoning;
   /** Show Play all (off on the hosted copy: GET /api/config). */
   playAll: boolean;
+  /** No working API key yet: samples cannot run; `hint` says why. */
+  disabled?: boolean; hint?: string;
   onPlay: (group: string, sc: Scenario) => void; onPlayAll: () => void; onStop: () => void;
 }) {
   const reduce = useReducedMotion();
@@ -74,7 +76,7 @@ export function Samples({ groups, error, playing, outcomes, usedReasoning, playA
                         return (
                           <li key={sc.id}>
                             <button type="button" className={styles.scenario} data-active={active || undefined} aria-current={active ? "true" : undefined}
-                              onClick={() => onPlay(g.key, sc)} title={got ? diffText(sc, got) : sc.turns.map((t) => t.text ?? `[photo] ${t.image ?? ""}`).join("\n")}
+                              onClick={() => onPlay(g.key, sc)} disabled={disabled} title={got ? diffText(sc, got) : sc.turns.map((t) => t.text ?? `[photo] ${t.image ?? ""}`).join("\n")}
                               aria-label={`${sc.title}. ${sc.subtitle ?? ""}. Expected: ${exp?.label ?? sc.expected}${thinks ? ". Router switches reasoning on" : ""}${ok == null ? "" : ok ? ". Matched" : ". Differs"}`}>
                               <ExpectedIcon expected={sc.expected} />
                               <span className={styles.scText}>
@@ -102,9 +104,10 @@ export function Samples({ groups, error, playing, outcomes, usedReasoning, playA
         </ul>
       </ScrollArea>
       <div className={styles.foot}>
+        {disabled && <span className={styles.keyHint}>{hint}</span>}
         {playing?.all
           ? <Button variant="secondary" onClick={onStop}><Square size={14} strokeWidth={2} aria-hidden="true" /> Stop</Button>
-          : playAll && <Button onClick={onPlayAll} disabled={!total}><Play size={14} strokeWidth={2} aria-hidden="true" /> Play all</Button>}
+          : playAll && <Button onClick={onPlayAll} disabled={!total || disabled}><Play size={14} strokeWidth={2} aria-hidden="true" /> Play all</Button>}
         {playing && !playing.all && <Button variant="ghost" onClick={onStop}>Stop</Button>}
       </div>
     </nav>

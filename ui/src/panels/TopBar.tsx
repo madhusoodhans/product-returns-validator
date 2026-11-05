@@ -3,7 +3,7 @@
  * number with its unit).
  * Missing values render as a dash; a new chat starts from an empty bar. */
 import type { ReactNode } from "react";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, KeyRound } from "lucide-react";
 import { ThemeSwitch, type Theme } from "../components/arc/theme-switch/theme-switch";
 import type { Health, Stats } from "../api";
 import { DASH, fmtInt } from "../format";
@@ -54,7 +54,11 @@ function backHref(landingUrl: string, theme: Theme) {
   } catch { return landingUrl; }
 }
 
-export function TopBar({ stats, health, theme, onTheme, landingUrl }: { stats: Stats | null; health: Health | null; theme: Theme; onTheme: (t: Theme) => void; landingUrl?: string }) {
+export function TopBar({ stats, health, theme, onTheme, landingUrl, keyStatus, onChangeKey }: {
+  stats: Stats | null; health: Health | null; theme: Theme; onTheme: (t: Theme) => void; landingUrl?: string;
+  /** The visitor's API key: "Change key" once one works, "Enter API key" before. */
+  keyStatus: "checking" | "ready" | "none"; onChangeKey: () => void;
+}) {
   const s = stats ?? {};
   const m = s.model_ms ?? null;
   return (
@@ -97,6 +101,10 @@ export function TopBar({ stats, health, theme, onTheme, landingUrl }: { stats: S
 
       <div className={styles.actions}>
         <HealthBadge health={health} />
+        <button type="button" className={styles.keyBtn} onClick={onChangeKey} data-missing={keyStatus === "none" || undefined}
+          title={keyStatus === "ready" ? "Use another vllm-sr API key" : "Enter your vllm-sr API key"}>
+          <KeyRound size={14} strokeWidth={1.9} aria-hidden="true" />{keyStatus === "ready" ? "Change key" : keyStatus === "checking" ? "Checking key" : "Enter API key"}
+        </button>
         <ThemeSwitch theme={theme} iconOnly variant="rise" onThemeChange={(next) => onTheme(next)} />
       </div>
     </header>

@@ -788,6 +788,17 @@ createServer(async (req, res) => {
     // MOCK_HEALTH=checking|guard_down|standard|unavailable shows the top bar's health badge in that state
     if (p === "/api/health" && req.method === "GET") return json(res, 200, mockHealth());
     if (p === "/api/stats" && req.method === "GET") return json(res, 200, statsPayload(url.searchParams.get("session") || ""));
+    // API key (docs/API.md "API key"), no real check: a key that starts with sk-vsr- and has "invalid" in it is refused,
+    // any other sk-vsr- key works. MOCK_KEY=none starts without a key (the dialog opens); default: the mock has one.
+    if (p === "/api/key" && req.method === "GET") return json(res, 200, { set: false, server_key: process.env.MOCK_KEY !== "none", failed: null });
+    if (p === "/api/key" && req.method === "DELETE") return json(res, 200, { ok: true });
+    if ((p === "/api/key" || p === "/api/key/check") && req.method === "POST") {
+      let k = ""; try { k = String(JSON.parse(await readBody(req)).key || "").trim(); } catch { /* bad json */ }
+      if (k.startsWith("sk-pt-")) return json(res, 400, { ok: false, code: "wrong_kind", message: "This demo needs a key from app.vllm-sr.ai: sk-pt keys only work for chat." });
+      if (!/^sk-vsr-[A-Za-z0-9_-]{8,}$/.test(k)) return json(res, 400, { ok: false, code: "format", message: "That does not look like a vllm-sr API key. Keys from app.vllm-sr.ai start with sk-vsr-." });
+      if (k.includes("invalid")) return json(res, 401, { ok: false, code: "invalid", message: "This API key was not accepted. Check that you copied all of it, or get a new one." });
+      return json(res, 200, { ok: true });
+    }
     if (p === "/api/reset" && req.method === "POST") {
       sessions.clear(); turns.clear();
       statsBySession.clear();

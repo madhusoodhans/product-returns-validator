@@ -101,3 +101,16 @@
   .caption[data-group="model"], .divider, .item[data-wide] { display: none; }
 }
 @media (max-width: 760px) { .stats { display: none; } }
+
+/* "Change key" / "Enter API key": a pill like "All demos"; accent-filled while no key is set. */
+.keyBtn {
+  flex: none; display: inline-flex; align-items: center; gap: var(--space-2); min-height: var(--control-height-sm); padding: 0 var(--space-3);
+  border: 1px solid var(--border); border-radius: var(--radius-pill); background: var(--surface); color: var(--foreground);
+  font: inherit; font-size: var(--text-sm); font-weight: 500; white-space: nowrap; cursor: pointer; -webkit-tap-highlight-color: transparent;
+  transition: border-color var(--duration-fast) var(--ease-standard), background var(--duration-fast) var(--ease-standard);
+}
+.keyBtn svg { color: var(--text-secondary); }
+.keyBtn[data-missing] { border-color: transparent; background: var(--accent); color: var(--accent-foreground, #fff); }
+.keyBtn[data-missing] svg { color: inherit; }
+@media (hover: hover) and (pointer: fine) { .keyBtn:not([data-missing]):hover { border-color: var(--border-strong); background: var(--surface-muted); } }
+@media (prefers-reduced-motion: reduce) { .keyBtn { transition: none; } }

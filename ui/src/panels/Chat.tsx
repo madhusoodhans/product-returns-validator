@@ -1,7 +1,7 @@
 /* Middle panel: the conversation. Replies stream in; each assistant reply carries its verdict chip. Clicking an earlier
  * user message shows that turn's flow on the right. The composer sends text, an uploaded photo (as a data URL), or both. */
 import { Fragment, useEffect, useRef, useState } from "react";
-import { CircleCheck, FileImage, FolderOpen, Info, MessageSquare, OctagonMinus, RotateCcw, ShieldX, UserRound, UserRoundCheck, UserRoundSearch, type LucideIcon } from "lucide-react";
+import { CircleCheck, FileImage, KeyRound, FolderOpen, Info, MessageSquare, OctagonMinus, RotateCcw, ShieldX, UserRound, UserRoundCheck, UserRoundSearch, type LucideIcon } from "lucide-react";
 import { motion, useReducedMotion } from "motion/react";
 import { Alert, type AlertTone } from "../components/arc/alert/alert";
 import { Badge } from "../components/arc/badge/badge";
@@ -69,8 +69,8 @@ function EndBanner({ ended, disabled, onNewChat, onReview }: { ended: Ended; dis
   );
 }
 
-function Bubble({ m, selected, live, canOpen, onOpen, policies }: {
-  m: Msg; selected: boolean; live: boolean; canOpen: boolean; onOpen: () => void; policies: Policies;
+function Bubble({ m, selected, live, canOpen, onOpen, policies, onChangeKey }: {
+  m: Msg; selected: boolean; live: boolean; canOpen: boolean; onOpen: () => void; policies: Policies; onChangeKey: () => void;
 }) {
   const reduce = useReducedMotion();
   const v = m.role === "assistant" ? verdictMeta(m.verdict) : null;
@@ -100,6 +100,14 @@ function Bubble({ m, selected, live, canOpen, onOpen, policies }: {
         {m.text ? <span className={styles.text}>{m.text}{m.streaming && <span className={styles.caret} aria-hidden="true" />}</span>
           : m.streaming ? <TextShimmer>Checking</TextShimmer> : null}
         {m.error && <span className={styles.err}>{m.error}</span>}
+        {m.keyError && (
+          <span className={styles.keyError} role="alert">
+            <span className={styles.err}>API key problem: {m.keyError}</span>
+            <Button variant="secondary" size="sm" onClick={onChangeKey}>
+              <KeyRound size={14} strokeWidth={1.9} aria-hidden="true" /> Change key
+            </Button>
+          </span>
+        )}
       </div>
       {v && Icon && (
         <div className={styles.meta}>
@@ -117,7 +125,7 @@ function Bubble({ m, selected, live, canOpen, onOpen, policies }: {
   );
 }
 
-export function Chat({ messages, busy, playing, replayMsg, liveTurn, order, policies, orders, showOrders, ended, onSend, onReview, onOpenTurn, onGallery, onReset }: {
+export function Chat({ messages, busy, playing, replayMsg, liveTurn, order, policies, orders, showOrders, ended, onSend, onReview, onOpenTurn, onGallery, onReset, keyReady, keyHint, onChangeKey }: {
   messages: Msg[]; busy: boolean; playing: Playing | null; replayMsg: string | null; liveTurn: string | null;
   order: OrderInfo | null; policies: Policies;
   /** The customer's orders, shown as cards under the greeting while `showOrders` (no order known yet, not a sample). */
@@ -125,6 +133,8 @@ export function Chat({ messages, busy, playing, replayMsg, liveTurn, order, poli
   /** message.ended of the latest reply: the chat is over, the composer gives way to the end banner. */
   ended: Ended | null; onReview: () => void;
   onSend: (input: { text?: string; image?: string }) => void; onOpenTurn: (m: Msg) => void; onGallery: () => void; onReset: () => void;
+  /** No working API key yet: typing, photos, order cards and the gallery are disabled; `keyHint` says why. */
+  keyReady: boolean; keyHint: string; onChangeKey: () => void;
 }) {
   const viewport = useRef<HTMLDivElement>(null);
   const [fileError, setFileError] = useState<string | null>(null);
@@ -135,7 +145,7 @@ export function Chat({ messages, busy, playing, replayMsg, liveTurn, order, poli
     if (el) el.scrollTo({ top: el.scrollHeight, behavior: "auto" });
   }, [tail, ended]);
 
-  const locked = busy || !!playing;
+  const locked = busy || !!playing || !keyReady;
   const cards = showOrders && orders.length > 0;
   const hasUser = messages.some((m) => m.role === "user");
   const streaming = last?.role === "assistant" && !!last.streaming;
@@ -170,7 +180,7 @@ export function Chat({ messages, busy, playing, replayMsg, liveTurn, order, poli
             {messages.map((m, i) => (
               <Fragment key={m.id}>
                 <Bubble m={m} selected={replayMsg === m.id} live={!replayMsg && !!m.turn && m.turn === liveTurn}
-                  canOpen={m.role === "user" && !!m.turn} onOpen={() => onOpenTurn(m)} policies={policies} />
+                  canOpen={m.role === "user" && !!m.turn} onOpen={() => onOpenTurn(m)} policies={policies} onChangeKey={onChangeKey} />
                 {cards && (m.greeting || (i === 0 && !messages.some((x) => x.greeting))) && (
                   <li className={styles.cardsRow}>
                     <OrderCards orders={orders} disabled={locked} compact={hasUser} onPick={(o) => onSend({ text: `Order ${o.order}` })} />
@@ -189,6 +199,12 @@ export function Chat({ messages, busy, playing, replayMsg, liveTurn, order, poli
       </ScrollArea>
       {ended ? null : <div className={styles.compose}>
         {fileError && <p className={styles.fileError} role="alert">{fileError}</p>}
+        {!keyReady && (
+          <div className={styles.keyNeeded}>
+            <span>{keyHint}: messages, photos and samples run on your own vllm-sr key.</span>
+            <Button size="sm" onClick={onChangeKey}><KeyRound size={14} strokeWidth={1.9} aria-hidden="true" /> Enter API key</Button>
+          </div>
+        )}
         <div className={styles.composeRow}>
           <Tooltip content="Sample photos">
             <button type="button" className={styles.gallery} aria-label="Pick a sample photo" onClick={onGallery} disabled={locked}>
@@ -196,7 +212,7 @@ export function Chat({ messages, busy, playing, replayMsg, liveTurn, order, poli
             </button>
           </Tooltip>
           <ChatComposer className={styles.composer} onSend={send} accept={ACCEPT} disabled={locked}
-            placeholder={playing ? "Playing a sample" : cards ? "Describe the problem, or pick an order above" : "Describe the problem, or attach a photo"}
+            placeholder={!keyReady ? keyHint : playing ? "Playing a sample" : cards ? "Describe the problem, or pick an order above" : "Describe the problem, or attach a photo"}
             labels={{ attach: "Upload a photo" }} />
         </div>
       </div>}

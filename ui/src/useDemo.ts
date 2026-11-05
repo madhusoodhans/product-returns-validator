@@ -1,8 +1,8 @@
 /* Chat state, the live flow, past-turn replay, and scenario playback (one scenario or Play all). */
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  NODES, errText, getCustomer, getStats, getTurn, newSession, streamChat,
-  type Customer, type Ended, type Group, type NodeKey, type OrderInfo, type PolicyRef, type RouterDetail, type Scenario, type Stats, type StepEvent, type Verdict,
+  ApiError, NODES, errText, getCustomer, getStats, getTurn, newSession, streamChat,
+  type ChatEvent, type Customer, type Ended, type Group, type NodeKey, type OrderInfo, type PolicyRef, type RouterDetail, type Scenario, type Stats, type StepEvent, type Verdict,
 } from "./api";
 
 export interface Msg {
@@ -29,7 +29,13 @@ export interface Msg {
   ended?: Ended | null;
   /** What vllm-sr/auto picked for this reply (the turn's router step `done`); unset for fixed and standard replies. */
   route?: RouterDetail | null;
+  /** The visitor's API key failed during this turn (key_error event, or no key on the server): the plain reason. */
+  keyError?: string;
 }
+
+/** The page's key handling (App): `recover` re-sends the key kept in this tab once when the server has none (it
+ * restarted or the key expired there); `failed` reports a key that stopped working. */
+export interface KeyHooks { recover: () => Promise<boolean>; failed: (code: string, message: string) => void }
 
 export type Flow = Partial<Record<NodeKey, StepEvent>>;
 export interface Replay { turn: string; msgId: string; steps: Flow | null; error?: string }
@@ -65,7 +71,9 @@ export function failOpen(f: Flow, message: string): Flow {
   return out;
 }
 
-export function useDemo() {
+export function useDemo(keyHooks?: KeyHooks) {
+  const hooksRef = useRef(keyHooks);
+  hooksRef.current = keyHooks;
   const [session, setSession] = useState(newSession);
   const [messages, setMessages] = useState<Msg[]>([]);
   const [flow, setFlow] = useState<Flow>({});
@@ -139,9 +147,9 @@ export function useDemo() {
     let gotMessage = false;
     let streamError: string | null = null;
     let expired: string | null = null;
+    let keyFailed: { code: string; message: string } | null = null;
     const sid = sessionRef.current;
-    try {
-      await streamChat({ session: sid, has_turns: hasTurnsRef.current, ...input }, (e) => {
+    const onEvent = (e: ChatEvent) => {
         switch (e.type) {
           case "step":
             if (e.node === "router" && e.status === "done" && e.detail) {
@@ -169,8 +177,30 @@ export function useDemo() {
             setFlow((f) => failOpen(f, e.message));
             patch(aid, { streaming: false });
             break;
+          case "key_error":
+            // The key was refused mid-turn: no reply, a clear error with "Change key" (never a template reply)
+            keyFailed = { code: e.code, message: e.message };
+            setFlow((f) => failOpen(f, "Stopped: the API key was refused"));
+            patch(aid, { keyError: e.message, streaming: false });
+            break;
         }
-      }, ac.signal);
+    };
+    try {
+      for (let attempt = 0; ; attempt++) {
+        try {
+          await streamChat({ session: sid, has_turns: hasTurnsRef.current, ...input }, onEvent, ac.signal);
+          break;
+        } catch (e) {
+          // no key on the server (it restarted, or the key expired there): send this tab's key again once, then retry
+          if (e instanceof ApiError && e.code === "no_key") {
+            if (attempt === 0 && (await hooksRef.current?.recover())) continue;
+            keyFailed = { code: "no_key", message: e.message };
+            patch(aid, { keyError: e.message, streaming: false });
+            break;
+          }
+          throw e;
+        }
+      }
     } catch (e) {
       if ((e as Error)?.name !== "AbortError") { patch(aid, { error: errText(e), streaming: false }); setError(errText(e)); }
     } finally {
@@ -179,6 +209,13 @@ export function useDemo() {
       patch(aid, { streaming: false });
       if (abortRef.current === ac) abortRef.current = null;
       setBusy(false);
+    }
+    if (keyFailed) {
+      // stop a running sample or Play all: every further turn would fail the same way
+      runRef.current++;
+      setPlaying(null);
+      hooksRef.current?.failed(keyFailed.code, keyFailed.message);
+      return undefined;
     }
     // The server restarted or dropped this chat: a new chat, with the notice under the greeting.
     if (expired && sid === sessionRef.current) {

@@ -46,3 +46,7 @@
 .foot > :first-child { flex: 1; }
 /* Quiet marker: the Router switches reasoning on for a reply of this chat. */
 .reasoning { flex: none; align-self: center; padding: 0 5px; border: 1px solid var(--border-strong); border-radius: 6px; font-size: 11px; line-height: 16px; font-weight: 500; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+
+/* No API key yet: the samples are greyed out and the foot says why. */
+.scenario:disabled { opacity: .55; cursor: not-allowed; }
+.keyHint { font-size: var(--text-xs); color: var(--text-secondary); }
