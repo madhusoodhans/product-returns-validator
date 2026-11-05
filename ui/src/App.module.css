@@ -2,6 +2,13 @@
 .shell { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; height: 100dvh; min-height: 0; overflow: hidden; }
 .body { display: grid; grid-template-columns: clamp(256px, 19vw, 300px) minmax(0, 1fr) clamp(380px, 30vw, 470px); min-height: 0; }
 .body > * { min-height: 0; }
+/* Right pane: stats on top (30%), the decision flow below (70%); each scrolls on its own. */
+.side {
+  display: grid; grid-template-rows: minmax(0, 3fr) minmax(0, 7fr); min-height: 0; min-width: 0;
+  border-left: 1px solid var(--border); background: color-mix(in oklch, var(--surface-muted) 55%, var(--background));
+}
+.statsPane { min-height: 0; border-bottom: 1px solid var(--border); }
+.side > :last-child { min-height: 0; }
 /* Always-visible notice under the panels. */
 .footer {
   padding: 6px var(--space-4); border-top: 1px solid var(--border); background: var(--background);
@@ -13,4 +20,6 @@
   .body { grid-template-columns: minmax(0, 1fr); }
   .body > * { height: auto; max-height: none; }
   .body > :nth-child(2) { height: 80dvh; }
+  .side { grid-template-rows: auto auto; border-left: 0; border-top: 1px solid var(--border); }
+  .side > :last-child { height: 80dvh; }
 }

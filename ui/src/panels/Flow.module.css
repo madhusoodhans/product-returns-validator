@@ -1,4 +1,4 @@
-.root { display: grid; grid-template-rows: auto minmax(0, 1fr); min-height: 0; height: 100%; min-width: 0; border-left: 1px solid var(--border); background: color-mix(in oklch, var(--surface-muted) 55%, var(--background)); }
+.root { display: grid; grid-template-rows: auto minmax(0, 1fr); min-height: 0; height: 100%; min-width: 0; }  /* the right pane (App .side) draws the border and background */
 .head { padding: var(--space-3) var(--space-5) var(--space-2); border-bottom: 1px solid var(--border-subtle); min-height: 52px; }
 .titleRow { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); }
 .titleRow h2 { font-size: var(--text-lg); }

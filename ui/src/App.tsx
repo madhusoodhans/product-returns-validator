@@ -1,4 +1,4 @@
-/* Page shell: stats bar on top; sample demos, chat and the decision flow side by side. */
+/* Page shell: plain top bar; sample demos, chat, and a right pane with the chat's stats above the decision flow. */
 import { useCallback, useEffect, useState } from "react";
 import type { Theme } from "./components/arc/theme-switch/theme-switch";
 import { errText, getConfig, getHealth, getSamples, type Health, type Samples as SamplesData } from "./api";
@@ -9,6 +9,8 @@ import { TopBar } from "./panels/TopBar";
 import { Samples } from "./panels/Samples";
 import { Chat } from "./panels/Chat";
 import { Flow } from "./panels/Flow";
+import { Stats } from "./panels/Stats";
+import { ScrollArea } from "./components/arc/scroll-area/scroll-area";
 import { Gallery } from "./panels/Gallery";
 import styles from "./App.module.css";
 
@@ -107,7 +109,7 @@ export function App() {
 
   return (
     <div className={styles.shell}>
-      <TopBar stats={demo.stats} health={health} theme={theme} onTheme={setTheme} landingUrl={landingUrl}
+      <TopBar health={health} theme={theme} onTheme={setTheme} landingUrl={landingUrl}
         keyStatus={key.status} busy={demo.busy || !!demo.playing} onChangeKey={() => key.setDialog(true)} onForgetKey={key.forget} />
       <div className={styles.body}>
         <Samples groups={samples.groups} error={samplesError} playing={demo.playing} outcomes={demo.outcomes} usedReasoning={demo.usedReasoning} playAll={playAll}
@@ -119,7 +121,12 @@ export function App() {
           ended={demo.ended} onReview={() => demo.send({ action: "review" })}
           keyReady={key.ready} keyHint={keyHint} onChangeKey={() => key.setDialog(true)}
           onSend={(i) => demo.send(i)} onOpenTurn={demo.showTurn} onGallery={() => setGalleryOpen(true)} onReset={demo.reset} />
-        <Flow flow={demo.flow} replay={demo.replay} hasTurn={demo.messages.some((m) => m.role === "user")} onBack={demo.closeReplay} />
+        <aside className={styles.side} aria-label="Stats and decision flow">
+          <ScrollArea className={styles.statsPane} label="Stats of this chat">
+            <Stats stats={demo.stats} />
+          </ScrollArea>
+          <Flow flow={demo.flow} replay={demo.replay} hasTurn={demo.messages.some((m) => m.role === "user")} onBack={demo.closeReplay} />
+        </aside>
       </div>
       <footer className={styles.footer}>Messages and photos are processed by the hosted vllm-sr API (research and evaluation use).</footer>
       <KeyDialog open={key.dialog} onOpenChange={key.setDialog} onSubmit={key.submit} error={key.error} canClose={key.ready} />
