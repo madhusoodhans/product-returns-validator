@@ -1,0 +1,7 @@
+
+== d3-flash: 64 complaints, median 122.5 ms, p90 237.7 ms
+issue (choice, 7 options): 63/64
+when (choice, scored on 42): 42/42
+excluded   AUC 0.977  acc@0.5 59/64  (yes=19)
+injection  AUC 1.000  acc@0.5 64/64  (yes=5)
+outcome @0.5: 64/64

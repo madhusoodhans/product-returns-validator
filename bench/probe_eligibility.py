@@ -1,7 +1,9 @@
 """Phase 0: D3 eligibility questions on the labelled complaints, per model.
 
-Usage: python bench/probe_eligibility.py [d3-mini d3-lite d3-edge]
-Writes results/p0_eligibility/<model>.jsonl (raw answers + ms) and prints accuracy per question and per outcome.
+Usage: python bench/probe_eligibility.py [d3-flash | d3-mini d3-lite d3-edge]
+d3-flash runs on the hosted System One API (bench/hosted.py: key from VLLM_SR_API_KEY or ~/.vllm-sr-key, 4 requests in
+flight) and writes results/d3_flash/eligibility_tuning.jsonl; the others are the Phase 0 local endpoints and write
+results/p0_eligibility/<model>.jsonl. Prints accuracy per question and per outcome.
 """
 import json
 import sys
@@ -10,12 +12,16 @@ from pathlib import Path
 
 import requests
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import hosted  # noqa: E402
+
 ROOT = Path(__file__).resolve().parent.parent
 POLICIES = json.loads((ROOT / "data/policies.json").read_text())
 COMPLAINTS = [json.loads(l) for l in (ROOT / "data/complaints/eligibility.jsonl").read_text().splitlines() if l.strip()]
 OUT = ROOT / "results/p0_eligibility"
 
 ENDPOINTS = {
+    "d3-flash": ("hosted", "vllm-sr/d3-flash"),
     "d3-mini": ("http://localhost:8899/v1/systemone", "vllm-sr/d3-mini"),
     "d3-lite": ("http://localhost:8899/v1/systemone", "vllm-sr/d3-lite"),
     "d3-edge": ("http://localhost:8301/v1/systemone", None),  # a d3-edge CPU worker, if you run one
@@ -61,14 +67,20 @@ def ask(model, c):
     body = {"state": state(c), "questions": questions()}
     if name:
         body["model"] = name
+    if url == "hosted":
+        return hosted.systemone(body)
     t = time.perf_counter()
     r = requests.post(url, json=body, timeout=120)
     r.raise_for_status()
     return r.json()["answers"], round((time.perf_counter() - t) * 1000, 1)
 
 
-def outcome(a, t=0.5):
-    """The routing rule (thresholds tuned later)."""
+MARGIN = 0.2   # "arrival" must lead "not said" by this much (app/eligibility.py ARRIVAL_MARGIN)
+
+
+def outcome(a, margin=None):
+    """The app's rule (app/eligibility.py decide)."""
+    margin = MARGIN if margin is None else margin
     issue = a["issue"]["choice"]
     if a["when"]["choice"] == "after":
         return "not_eligible"
@@ -76,7 +88,7 @@ def outcome(a, t=0.5):
         return {"not_visual": "human", "no_damage": "not_eligible", "unclear": "clarify"}[issue]
     # visible damage: eligible only when the customer says it was there on arrival; no timing -> ask
     pr = a["when"]["probabilities"]
-    return "eligible" if a["when"]["choice"] == "arrival" and pr["arrival"] - pr["not_said"] >= 0.2 else "clarify"
+    return "eligible" if a["when"]["choice"] == "arrival" and pr["arrival"] - pr["not_said"] >= margin else "clarify"
 
 
 def auc(pos, neg):
@@ -85,13 +97,21 @@ def auc(pos, neg):
     return sum((p > n) + 0.5 * (p == n) for p in pos for n in neg) / (len(pos) * len(neg))
 
 
-def run(model):
+def out_path(model, name=None):
+    if model == "d3-flash":
+        d = ROOT / "results/d3_flash"
+        d.mkdir(parents=True, exist_ok=True)
+        return d / f"eligibility_{name or 'tuning'}.jsonl"
     OUT.mkdir(parents=True, exist_ok=True)
-    rows = []
-    for c in COMPLAINTS:
+    return OUT / (f"{name}_{model}.jsonl" if name else f"{model}.jsonl")
+
+
+def run(model):
+    def one(c):
         a, ms = ask(model, c)
-        rows.append({"id": c["id"], "ms": ms, "answers": a})
-    (OUT / f"{model}.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
+        return {"id": c["id"], "ms": ms, "answers": a}
+    rows = hosted.pmap(one, COMPLAINTS) if ENDPOINTS[model][0] == "hosted" else [one(c) for c in COMPLAINTS]
+    out_path(model).write_text("".join(json.dumps(r) + "\n" for r in rows))
     report(model, rows)
 
 
