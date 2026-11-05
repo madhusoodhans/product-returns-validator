@@ -2,11 +2,12 @@
 # Starts (or restarts) the demo server on $HOST:$PORT (default 127.0.0.1:8602).
 #   ./start_server.sh        in the foreground
 #   ./start_server.sh --bg   in the background, log in logs/server.log
-# Environment: HOST, PORT, ROUTER_URL, ROUTER_ADMIN_URL, PLAY_ALL, LANDING_URL, MODEL_SLOTS
-# (see README.md), PYTHON (default .venv/bin/python).
+# Environment: VLLM_SR_API_KEY (required), HOST, PORT, VLLM_SR_API_BASE, D3_MODEL, GUARD_MODEL, LLM_MODEL, PLAY_ALL,
+# LANDING_URL, MODEL_SLOTS, TRUST_PROXY (see README.md), PYTHON (default .venv/bin/python).
 cd "$(dirname "$0")"
 PY="${PYTHON:-.venv/bin/python}"
 PORT="${PORT:-8602}"
+[ -n "${VLLM_SR_API_KEY:-}" ] || { echo "VLLM_SR_API_KEY is not set (the hosted vllm-sr API key)" >&2; exit 1; }
 [ -x "$PY" ] || { echo "$PY not found: python3 -m venv .venv && .venv/bin/pip install -r requirements.txt" >&2; exit 1; }
 mkdir -p logs
 export MALLOC_ARENA_MAX="${MALLOC_ARENA_MAX:-2}"   # many threads: without it memory grows ~6x under load

@@ -2,11 +2,11 @@
 # Checks the running demo end to end: GET /health, then sample conversations through POST /api/chat (the same HTTP
 # and SSE path the page uses), every turn's verdict compared with data/scenarios.json. Exit code 0 = all passed.
 #   deploy/smoke_test.sh          three samples: an approved return, an order outside the window, a jailbreak (~15 s)
-#   deploy/smoke_test.sh --all    all 16 samples (~1-2 min)
+#   deploy/smoke_test.sh --all    all 19 samples (~2 min; about 90 hosted API calls)
+# HOST / PORT: the demo server (default 127.0.0.1:8602); PYTHON (default .venv/bin/python).
 set -uo pipefail
 cd "$(dirname "$0")/.."
-source deploy/common.sh
-exec .venv/bin/python -I - "http://$HOST:$PORT" "$@" <<'PY'
+exec "${PYTHON:-.venv/bin/python}" -I - "http://${HOST:-127.0.0.1}:${PORT:-8602}" "$@" <<'PY'
 import json
 import sys
 import uuid
@@ -27,7 +27,7 @@ print(f"Smoke test against {base}")
 try:
     h = requests.get(f"{base}/health", timeout=120).json()
 except Exception as e:  # noqa: BLE001
-    print(f"  FAIL  GET /health: {e}\nIs the demo server running? (./start_server.sh --bg, or deploy/up.sh)")
+    print(f"  FAIL  GET /health: {e}\nIs the demo server running? (./start_server.sh --bg)")
     sys.exit(1)
 parts = {k: v for k, v in h.items() if isinstance(v, bool) and k != "ok"}
 detail = h.get("detail") or {}
