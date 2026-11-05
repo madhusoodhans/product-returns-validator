@@ -52,7 +52,13 @@
 .health[data-tone="bad"] { color: var(--danger); border-color: color-mix(in oklch, var(--danger) 45%, transparent); }
 .health[data-tone="bad"] .healthDot { background: var(--danger); }
 
+/* Narrower screens: the title stays on the one row, centred between the back link and the controls, a size smaller
+ * (cut with an ellipsis if it still does not fit; the full text is in its tooltip). Only phones get a second row. */
 @media (max-width: 1240px) {
+  .bar { grid-template-columns: auto minmax(0, 1fr) auto; }
+  .title h1 { font-size: var(--text-base); }
+}
+@media (max-width: 760px) {
   .bar { grid-template-columns: minmax(0, 1fr) auto; }
   .title { grid-column: 1 / -1; grid-row: 2; justify-content: flex-start; }
   .title h1 { white-space: normal; font-size: var(--text-base); }
