@@ -124,8 +124,9 @@ class Handler(BaseHTTPRequestHandler):
             if kind == "d3":
                 fail = fail or next((c for t, c in CONFIG["fail_if"].items() if t in str(body.get("state"))), None)
             down = model in CONFIG["down"]
-            COUNTS["busy_now"][kind] = COUNTS["busy_now"].get(kind, 0) + 1
-            COUNTS["busy_max"][kind] = max(COUNTS["busy_max"].get(kind, 0), COUNTS["busy_now"][kind])
+            slot = "chat" if kind == "chat" else model   # the app's slot kinds: d3, guard, chat
+            COUNTS["busy_now"][slot] = COUNTS["busy_now"].get(slot, 0) + 1
+            COUNTS["busy_max"][slot] = max(COUNTS["busy_max"].get(slot, 0), COUNTS["busy_now"][slot])
             scale, slow = CONFIG["scale"], (CONFIG["slow_ms"] + CONFIG["slow"].get(model, 0)) / 1000
         try:
             if down:   # a stopped backend: the connection closes without an answer
@@ -142,7 +143,7 @@ class Handler(BaseHTTPRequestHandler):
             getattr(self, kind)(body, scale)
         finally:
             with _lock:
-                COUNTS["busy_now"][kind] -= 1
+                COUNTS["busy_now"][slot] -= 1
 
     def d3(self, body, scale):
         time.sleep(scale * (0.3 if body.get("images") else 0.05) * random.uniform(0.8, 1.3))
@@ -159,6 +160,20 @@ class Handler(BaseHTTPRequestHandler):
             text = " ".join(WORDS[:random.randint(12, len(WORDS))])
         usage = {"prompt_tokens": 600, "completion_tokens": len(text.split()), "total_tokens": 600 + len(text.split())}
         decision = CONFIG["pick"] or ("standard" if UPSET.search(str(last)) else "fast")
+        if "GUARDME" in str(last):   # the hosted Router's own guard: a refusal text, no model
+            text = "This request was declined by the router's safety guard. Please rephrase it."
+            usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+            route = [("x-vsr-selected-decision", "guard")]
+            if not body.get("stream"):
+                return self._json(200, {"choices": [{"message": {"role": "assistant", "content": text}}], "usage": usage}, route)
+            self.send_response(200)
+            self.send_header("content-type", "text/event-stream")
+            for k, v in route:
+                self.send_header(k, v)
+            self.end_headers()
+            self.close_connection = True
+            self.wfile.write(f"data: {json.dumps({'choices': [{'delta': {'content': text}}]})}\n\ndata: [DONE]\n\n".encode())
+            return
         route = [("x-vsr-selected-model", "qwen/qwen3.8-27b"), ("x-vsr-selected-decision", decision),
                  ("x-vsr-selected-reasoning", "off" if decision == "fast" else "on"),
                  ("x-vsr-matched-projections", {"fast": "effort_off", "standard": "effort_medium"}.get(decision, "effort_high")),

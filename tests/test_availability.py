@@ -324,6 +324,18 @@ def test_vela_flag_blocks_unless_d3_is_sure_it_is_normal():
     assert msg["verdict"] == "need_photo" and "Vela flagged it" in steps["guardrail"]["summary"]
 
 
+def test_router_guard_reply_is_never_sent():
+    """The hosted Router's own guard answers some calls with a refusal text instead of a model: never shown to the
+    customer; the decision is worded from the template, and the reply call is not made after a guarded extraction."""
+    fresh(answers=NO_APPROVAL | {"complaint": 0.9})
+    steps, msg, evs = run(Session(str(uuid.uuid4())), CRACKED + " GUARDME")
+    assert msg["verdict"] == "need_photo" and "safety guard" not in msg["text"], msg["text"]
+    assert steps["router"]["status"] == "blocked" and steps["router"]["detail"]["decision"] == "guard"
+    assert steps["reply"]["summary"] == "Standard reply: the Router's guard declined the call"
+    assert "guard declined" in steps["claim"]["summary"] and calls_by().get("llm") == 1
+    assert next(e for e in evs if e["type"] == "done")["route"]["decision"] == "guard"
+
+
 def test_mid_turn_d3_failure_leaves_the_chat_unchanged():
     fresh(fail_if={"Return policy covers": 500}, answers=NO_APPROVAL)
     s = Session(str(uuid.uuid4()))

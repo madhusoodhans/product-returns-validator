@@ -153,9 +153,9 @@ class State:
                 return
             st = chat.stats
             st.calls += done["calls"]
-            # what the Router picked for the reply; None when no LLM wrote it (fixed or standard reply)
+            # what the Router picked for the reply; None when no LLM wrote it (fixed or standard reply, the Router's guard)
             r = done.get("route")
-            st.reply_routes.append({k: r.get(k) for k in ("model", "decision", "reasoning")} if r else None)
+            st.reply_routes.append({k: r.get(k) for k in ("model", "decision", "reasoning")} if r and r.get("model") else None)
             st.blocked += verdict == "blocked"
             st.off_topic += verdict == "off_topic"
             st.avoided += bool(done.get("avoided"))

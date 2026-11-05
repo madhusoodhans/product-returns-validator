@@ -176,7 +176,10 @@ class Session:
             if vg:
                 calls.append(("vela", vms, vtok))
             calls.append(("d3", sms, stok))
-            vela_block = bool(vg) and vg["flagged"]
+            # Vela's attack score flags any message; its harm score only one D3 does not already call off-topic (a coding
+            # request is off-topic, not an attack; off-topic gets its own fixed reply)
+            vela_attack = bool(vg) and vg["attack"] >= turn_checks.ATTACK
+            vela_block = vela_attack or (bool(vg) and vg["harm"] >= turn_checks.HARM and sc["scope"] != "off_topic")
             intent = sc["intent"]
             ctx["complaint"] = sc["complaint"]
             command = sc["command"] >= 0.5
@@ -196,7 +199,8 @@ class Session:
             jb = f"Vela attack {vg['attack']:.2f}, harm {vg['harm']:.2f}" if vg else "D3 only"
             coded = command and re.search(r"[;|&$<>{}`]|rm -|drop table|curl |powershell", text, re.I)
             what = ("commands or code" if coded else
-                    "a prompt attack (Vela)" if vela_block and sc["scope"] != "instructions" else
+                    "a prompt attack (Vela)" if vela_attack and sc["scope"] != "instructions" else
+                    "a harmful request (Vela)" if vela_block and sc["scope"] != "instructions" else
                     "instructions to the assistant")
             gstatus, summary = "done", f"Passed ({jb}; D3: on topic)"
             if vela_false_alarm:
@@ -280,7 +284,9 @@ class Session:
             out = None
             failed = ctx.setdefault("llm_failed", {})
             # one call to vllm-sr/auto; not again when it already failed in this turn (claim extraction)
-            if availability.available("llm") and "llm" not in failed:
+            if ctx.get("router_guard"):   # the Router's guard already declined this turn's claim reading: no second call
+                out = {"route": ctx["router_guard"], "ms": 0, "tokens": 0, "text": ""}
+            elif availability.available("llm") and "llm" not in failed:
                 yield step("router", "running", "vllm-sr/auto picks the model and reasoning for the reply", LLM_MODEL)
                 yield step("reply", "running", None, LLM_MODEL)
                 try:
@@ -289,7 +295,19 @@ class Session:
                             out = val   # buffered: the reply is checked before the customer sees it
                 except Unavailable as e:
                     failed["llm"] = e.text
-            if out is None:
+            if out is not None and router_guarded(out.get("route")):
+                # the hosted Router's own safety guard answered instead of a model (it read the customer's words in
+                # the reply call): its refusal is not a reply to the customer, the decision is worded from a template
+                if out["ms"]:
+                    calls.append(("llm", out["ms"], out["tokens"]))
+                ctx["route"] = out["route"]
+                yield step("router", "blocked", "Guard decision: the Router declined the call (the customer's words "
+                           "were flagged); no model ran", None, out["route"].get("routing_ms"),
+                           {**out["route"], "call": "reply", "extraction": ctx.get("extract_route")})
+                yield from self._standard_reply(verdict, ctx, "the Router's safety guard declined the reply call", step,
+                                                "Standard reply: the Router's guard declined the call")
+                out = {"text": reply.standard(verdict, ctx)}
+            elif out is None:
                 if steps["router"]["status"] in ("waiting", "running"):
                     yield step("router", "skipped" if steps["router"]["status"] == "waiting" else "failed",
                                "No answer from vllm-sr/auto: standard reply", LLM_MODEL)
@@ -470,7 +488,14 @@ class Session:
             else:
                 calls.append(("llm", ms, tok))
                 ctx["extract_route"] = route
-                return d, ms, LLM_MODEL, None
+                if not router_guarded(route):
+                    return d, ms, LLM_MODEL, None
+                ctx["router_guard"] = route
+                note = "the Router's guard declined the call"   # no extraction: the fallback below, as when it is down
+                yield step("claim", "running", None, None)
+                known = [n for n in re.findall(r"\b\d{4,6}\b", text) if n in claim.CUSTOMER["orders"]]
+                return ({"order": known[0] if known else None,
+                         "problem": text if ctx.get("complaint", 0) >= 0.5 else None}, ms, None, note)
         yield step("claim", "running", None, None)
         known = [n for n in re.findall(r"\b\d{4,6}\b", text) if n in claim.CUSTOMER["orders"]]
         problem = text if ctx.get("complaint", 0) >= 0.5 else None
@@ -747,6 +772,11 @@ def policy_ref(verdict, ctx, c=None):
         return {"accept": "covered", "not_eligible": "not_covered"}.get(c.final[0])
     return {"accept": "covered", "need_photo": "photo", "retake": "photo", "mismatch": "photo", "no_damage": "photo",
             "clarify": "covered"}.get(verdict)
+
+
+def router_guarded(route):
+    """The hosted Router answered with its own guard decision (no model ran)."""
+    return bool(route) and (route.get("decision") == "guard" or not route.get("model"))
 
 
 def route_summary(route):

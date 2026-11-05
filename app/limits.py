@@ -101,9 +101,12 @@ _cool = {}   # kind -> time until which the API asked us to wait (Retry-After of
 def post(kind, url, **kw):
     """requests.post through the gate of `kind`, holding the slot until the response is consumed. A 429/503 is retried
     once after Retry-After when that is at most RETRY_CAP_S; a second one, or a longer wait, raises Busy. While a 429's
-    Retry-After runs, other calls of the same kind raise Busy at once without a request."""
-    if _cool.get(kind, 0) > time.time():
-        raise Busy(f"{GATES[kind].name}: rate limited, retry after {_cool[kind] - time.time():.0f} s", 429)
+    Retry-After runs, other calls of the same kind wait for it (short) or raise Busy at once without a request (long)."""
+    left = _cool.get(kind, 0) - time.time()
+    if left > RETRY_CAP_S:
+        raise Busy(f"{GATES[kind].name}: rate limited, retry after {left:.0f} s", 429)
+    if left > 0:
+        time.sleep(left)   # a short Retry-After: wait it out, as the call that got the 429 does
     for attempt in (0, 1):
         with GATES[kind], requests.post(url, **kw) as r:
             if r.status_code not in THROTTLED:
