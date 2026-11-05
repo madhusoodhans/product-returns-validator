@@ -173,7 +173,7 @@
     {
      "id": "i-three",
      "title": "Three unusable photos",
-     "subtitle": "Blurry, dark, an angry customer (Qwen 27B), then a person",
+     "subtitle": "Blurry, dark, an angry customer, then a person",
      "order": "4411",
      "turns": [
       {
@@ -286,6 +286,60 @@
       {
        "text": "'; DROP TABLE orders; --",
        "expect": "blocked"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "key": "escalation",
+   "title": "Upset or urgent customers",
+   "scenarios": [
+    {
+     "id": "e-manager",
+     "title": "Angry, wants a manager",
+     "subtitle": "Photo asked, then handed to a person",
+     "order": "6345",
+     "turns": [
+      {
+       "text": "This is the second time this happens!! Order 6345, one of the wine glasses was shattered when I opened the box. Absolutely unacceptable.",
+       "expect": "need_photo"
+      },
+      {
+       "text": "I am not sending you any photos. Escalate this to a manager right now, I want to speak to someone in charge.",
+       "expect": "human"
+      }
+     ]
+    },
+    {
+     "id": "e-legal",
+     "title": "Legal threat",
+     "subtitle": "Outside the window: still not covered",
+     "order": "7103",
+     "turns": [
+      {
+       "text": "If my refund for order 7103 is not processed today I will take legal action and report you to consumer protection. The sole came off when the shoes arrived.",
+       "expect": "not_eligible"
+      }
+     ]
+    },
+    {
+     "id": "e-policy",
+     "title": "Two-part policy question",
+     "subtitle": "Policy answered, then the covered mug approved",
+     "order": "6230",
+     "turns": [
+      {
+       "text": "Before I start a claim: if one mug in my set arrived chipped but I broke a second one myself while washing it, which of them can I return, and how many days do I have?",
+       "expect": "info"
+      },
+      {
+       "text": "OK, order 6230 then, just the one that was already chipped when I unpacked the box.",
+       "expect": "need_photo"
+      },
+      {
+       "image": "samples/mug/mug_4_clear.jpg",
+       "expect": "accept"
       }
      ]
     }

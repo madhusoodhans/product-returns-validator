@@ -1,0 +1,7 @@
+1. 50 visitors, 347 turns in 28 s: p50 2.97 s, p95 4.31 s, max 4.91 s; busy 0, rate limited 0, errors 0; most model calls at once {'guard': 12, 'd3': 12, 'chat': 12}
+2. 2000 chats in 127 s: kept 300 chats, memory 95.8 MB before phase 2 -> 231.5 MB; busy 0, errors 0
+3a. every call 429: 20/20 turns answered busy with a failed capacity step, max 2.1 s
+3b. 30% of calls 429: 18/40 busy, 22 answered, 0 errors; throttled so far 168
+4. slow models, 60 chats at once: 36 busy (10 over the 50-chat cap, 26 waited over 15 s for a slot), 24 answered, 0 errors
+
+problems: none

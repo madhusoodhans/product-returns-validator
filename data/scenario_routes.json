@@ -1,1 +1,257 @@
-{}
+{
+ "v-phone": [
+  {
+   "model": "qwen/qwen3.8-27b",
+   "decision": "fast",
+   "reasoning": "off",
+   "effort": "effort_off"
+  },
+  {
+   "model": "qwen/qwen3.8-27b",
+   "decision": "fast",
+   "reasoning": "off",
+   "effort": "effort_off"
+  }
+ ],
+ "v-sneaker": [
+  {
+   "model": "qwen/qwen3.8-27b",
+   "decision": "fast",
+   "reasoning": "off",
+   "effort": "effort_off"
+  },
+  {
+   "model": "qwen/qwen3.8-27b",
+   "decision": "fast",
+   "reasoning": "off",
+   "effort": "effort_off"
+  },
+  {
+   "model": "qwen/qwen3.8-27b",
+   "decision": "fast",
+   "reasoning": "off",
+   "effort": "effort_off"
+  }
+ ],
+ "v-mug": [
+  {
+   "model": "qwen/qwen3.8-27b",
+   "decision": "fast",
+   "reasoning": "off",
+   "effort": "effort_off"
+  },
+  {
+   "model": "qwen/qwen3.8-27b",
+   "decision": "fast",
+   "reasoning": "off",
+   "effort": "effort_off"
+  },
+  {
+   "model": "qwen/qwen3.8-27b",
+   "decision": "fast",
+   "reasoning": "off",
+   "effort": "effort_off"
+  }
+ ],
+ "v-glass": [
+  {
+   "model": "qwen/qwen3.8-27b",
+   "decision": "fast",
+   "reasoning": "off",
+   "effort": "effort_off"
+  },
+  {
+   "model": "qwen/qwen3.8-27b",
+   "decision": "fast",
+   "reasoning": "off",
+   "effort": "effort_off"
+  }
+ ],
+ "i-laptop": [
+  {
+   "model": "qwen/qwen3.8-27b",
+   "decision": "fast",
+   "reasoning": "off",
+   "effort": "effort_off"
+  }
+ ],
+ "i-window": [
+  {
+   "model": "qwen/qwen3.8-27b",
+   "decision": "standard",
+   "reasoning": "on",
+   "effort": "effort_medium"
+  }
+ ],
+ "i-mug": [
+  {
+   "model": "qwen/qwen3.8-27b",
+   "decision": "fast",
+   "reasoning": "off",
+   "effort": "effort_off"
+  },
+  {
+   "model": "qwen/qwen3.8-27b",
+   "decision": "fast",
+   "reasoning": "off",
+   "effort": "effort_off"
+  },
+  {
+   "model": "qwen/qwen3.8-27b",
+   "decision": "fast",
+   "reasoning": "off",
+   "effort": "effort_off"
+  }
+ ],
+ "i-headphones": [
+  {
+   "model": "qwen/qwen3.8-27b",
+   "decision": "fast",
+   "reasoning": "off",
+   "effort": "effort_off"
+  }
+ ],
+ "i-hand": [
+  {
+   "model": "qwen/qwen3.8-27b",
+   "decision": "fast",
+   "reasoning": "off",
+   "effort": "effort_off"
+  },
+  {
+   "model": "qwen/qwen3.8-27b",
+   "decision": "fast",
+   "reasoning": "off",
+   "effort": "effort_off"
+  }
+ ],
+ "i-dark": [
+  {
+   "model": "qwen/qwen3.8-27b",
+   "decision": "fast",
+   "reasoning": "off",
+   "effort": "effort_off"
+  },
+  {
+   "model": "qwen/qwen3.8-27b",
+   "decision": "fast",
+   "reasoning": "off",
+   "effort": "effort_off"
+  }
+ ],
+ "i-three": [
+  {
+   "model": "qwen/qwen3.8-27b",
+   "decision": "fast",
+   "reasoning": "off",
+   "effort": "effort_off"
+  },
+  {
+   "model": "qwen/qwen3.8-27b",
+   "decision": "fast",
+   "reasoning": "off",
+   "effort": "effort_off"
+  },
+  {
+   "model": "qwen/qwen3.8-27b",
+   "decision": "fast",
+   "reasoning": "off",
+   "effort": "effort_off"
+  },
+  {
+   "model": "qwen/qwen3.8-27b",
+   "decision": "fast",
+   "reasoning": "off",
+   "effort": "effort_off"
+  },
+  {
+   "model": "qwen/qwen3.8-27b",
+   "decision": "fast",
+   "reasoning": "off",
+   "effort": "effort_off"
+  }
+ ],
+ "m-jailbreak": [
+  null,
+  null
+ ],
+ "m-bottle": [
+  {
+   "model": null,
+   "decision": "guard",
+   "reasoning": null,
+   "effort": null
+  },
+  {
+   "model": "qwen/qwen3.8-27b",
+   "decision": "fast",
+   "reasoning": "off",
+   "effort": "effort_off"
+  },
+  {
+   "model": "qwen/qwen3.8-27b",
+   "decision": "fast",
+   "reasoning": "off",
+   "effort": "effort_off"
+  }
+ ],
+ "m-offtopic": [
+  null,
+  {
+   "model": "qwen/qwen3.8-27b",
+   "decision": "fast",
+   "reasoning": "off",
+   "effort": "effort_off"
+  }
+ ],
+ "m-fake": [
+  null,
+  null
+ ],
+ "m-command": [
+  null,
+  null
+ ],
+ "e-manager": [
+  {
+   "model": "qwen/qwen3.8-flash-next",
+   "decision": "standard",
+   "reasoning": "on",
+   "effort": "effort_medium"
+  },
+  {
+   "model": "qwen/qwen3.8-27b",
+   "decision": "fast",
+   "reasoning": "off",
+   "effort": "effort_off"
+  }
+ ],
+ "e-legal": [
+  {
+   "model": "qwen/qwen3.8-flash-next",
+   "decision": "standard",
+   "reasoning": "on",
+   "effort": "effort_medium"
+  }
+ ],
+ "e-policy": [
+  {
+   "model": "qwen/qwen3.8-27b",
+   "decision": "fast",
+   "reasoning": "off",
+   "effort": "effort_off"
+  },
+  {
+   "model": "qwen/qwen3.8-27b",
+   "decision": "fast",
+   "reasoning": "off",
+   "effort": "effort_off"
+  },
+  {
+   "model": "qwen/qwen3.8-27b",
+   "decision": "fast",
+   "reasoning": "off",
+   "effort": "effort_off"
+  }
+ ]
+}
