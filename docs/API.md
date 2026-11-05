@@ -43,7 +43,8 @@ Images are served at `/<path>`.
 
 ## POST /api/chat → `text/event-stream`
 Body: `{"session": "uuid", "text": "...?", "image": "samples/... or data:image/jpeg;base64,...?", "has_turns": false}`
-(text, image or both; `session` must be a UUID, see "Many visitors" below).
+(text, image or both; `session` must be a UUID, see "Many visitors" below). Header `X-Visitor-Id`: the tab's visitor id;
+without a key for that visitor the answer is 401 `{"code": "no_key", ...}` and nothing runs (see "API key" below).
 
 Events (each `data:` is JSON with a `type`):
 
@@ -55,6 +56,7 @@ Events (each `data:` is JSON with a `type`):
 | `stats` | stats object (below) | top bar update |
 | `done` | `turn` | end of turn; `turn` = turn id, for replaying its flow |
 | `error` | `message` | |
+| `key_error` | `code`, `message` | the visitor's API key was refused during the turn; no `message` follows (see "API key") |
 
 `node` (in flow order): `guardrail`, `router`, `claim`, `policy`, `eligibility`, `image_check`, `decision`, `reply`.
 `status`: `waiting | running | done | skipped | blocked | failed`. Nodes not used by this turn are sent as `skipped`
@@ -264,6 +266,58 @@ The stored `step` events of a past turn, so clicking an earlier message replays 
   this object as `health`.
 - `/api/metrics` adds `unavailable` and `errors` counts. New verdict: `unavailable`. The `error` SSE event is no longer
   sent.
-- Hosted APIs: `VLLM_SR_API_BASE` (default https://app.vllm-sr.ai) with the key in `VLLM_SR_API_KEY` as a bearer
-  token; `D3_MODEL`, `GUARD_MODEL` and `LLM_MODEL` name the models (defaults `vllm-sr/d3-flash`, `vllm-sr/vela3-flash`,
+- Hosted APIs: `VLLM_SR_API_BASE` (default https://app.vllm-sr.ai) with the visitor's own key as a bearer token
+  (see "API key"; `VLLM_SR_API_KEY` is only an optional fallback). The health probe is the public `GET /v1/models`:
+  no key needed, so the badge works before any key is entered; `D3_MODEL`, `GUARD_MODEL` and `LLM_MODEL` name the models (defaults `vllm-sr/d3-flash`, `vllm-sr/vela3-flash`,
   `vllm-sr/auto`).
+
+## API key (2026-11-05, entered in the browser)
+
+Every visitor brings their own vllm-sr key; the server needs none. Shared with the landing page and the receipt demo.
+
+- Visitor: each request carries `X-Visitor-Id`, a UUID the page keeps in `sessionStorage` (one per tab). The key is
+  kept per visitor in process memory only (`app/keys.py`): never on disk, in logs, metrics, events or error messages.
+  It is dropped after 4 hours without use (`KEY_IDLE_S`), on `DELETE /api/key`, and when it fails during a turn.
+- Validation (both endpoints below): the key is trimmed; it must start with `sk-vsr-` (an `sk-pt-` key works for chat
+  only, so it is refused as `wrong_kind`). Then one tiny System One call (`vllm-sr/d3-flash`, state "ok", one `noul`
+  question) and one tiny System Two call (`vllm-sr/auto`, "Say OK", `max_tokens` 1); both must succeed. A key that
+  passed is not checked again for 10 minutes (only its hash is kept for that). At most 10 checks a minute per visitor
+  and per IP (`KEY_CHECKS_PER_MIN`): more answer 429 `rate_limited`.
+- Codes (`message` is a plain sentence for the page):
+
+  | code | HTTP | when |
+  |---|---|---|
+  | `format` | 400 | not shaped like an `sk-vsr-` key |
+  | `wrong_kind` | 400 | an `sk-pt-` key, or 403 `model_not_allowed` |
+  | `invalid` | 401 | 401 from the API (`missing_api_key`, `invalid_api_key`) |
+  | `disabled` | 403 | 403 `key_disabled` or `access_denied` |
+  | `quota` | 429 | 429 `quota_exceeded` ("It resets at 00:00 UTC.") |
+  | `rate_limited` | 429 | any other 429 (with the Retry-After seconds), or too many checks here |
+  | `unreachable` | 502 | network error, timeout or 5xx |
+  | `error` | 502 | anything else |
+  | `no_key` | 401 | `POST /api/chat` from a visitor without a key |
+
+Endpoints:
+
+- `POST /api/key/check` `{"key"}` -> 200 `{"ok": true}` or `{"ok": false, "code", "message"}`. Validates only, stores
+  nothing. CORS for this endpoint only: the origin of `LANDING_URL`, `http://localhost:8630` and
+  `http://127.0.0.1:8630` (OPTIONS preflight answered with 204).
+- `POST /api/key` `{"key"}` + `X-Visitor-Id` -> validates as above, then keeps the key for this visitor. Same answers.
+- `GET /api/key` + `X-Visitor-Id` -> `{"set": bool, "server_key": bool, "failed": code | null}`. Never the key or any
+  part of it. `server_key`: the server has the optional env key, so visitors without a key can still chat. `failed`:
+  why this visitor's key was dropped during a turn. `GET /api/config` carries the same object as `key`.
+- `DELETE /api/key` + `X-Visitor-Id` -> forgets it.
+
+During a turn, a call refused because of the key (401, 403 `key_disabled` / `access_denied` / `model_not_allowed`, 429
+`quota_exceeded`) stops the turn: the steps not finished are sent `failed` ("Stopped: the API key was refused") or
+`skipped`, then `{"type": "key_error", "code", "message"}`; no reply, no template, the chat stays as it was before
+the turn. The key is dropped (the next action asks for one; `GET /api/key` shows `failed`). It does not count against
+the model's circuit breaker. Other 429s keep the busy reply; 429 cooldowns are per key.
+
+The page's side: the key lives in `sessionStorage` (never `localStorage`, cookies or URLs). The landing page hands it
+over as a URL fragment, `#key=<key>` (never sent to a server); the page removes it from the address bar before the
+first render, saves it and sends `POST /api/key`. On a 401 `no_key` (server restarted, key expired there) the page
+sends the stored key again once and retries the turn.
+
+`VLLM_SR_API_KEY` is optional and off by default: when set, visitors without a key of their own use it. Anything shaped
+like a key in the server's output is printed as `sk-***` (a redaction guard on stdout and stderr).

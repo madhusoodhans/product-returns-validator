@@ -28,8 +28,8 @@ Chats are kept in memory only, for 30 minutes after the last message; a photo se
 for 10 minutes. There are limits per visitor (messages per minute, new chats per minute); when the models are busy
 the assistant says so and you can try again.
 
-<!-- Space settings: add VLLM_SR_API_KEY as a Space *secret* (Settings -> Variables and secrets -> New secret), never as
-a variable. The Dockerfile sets PLAY_ALL=0 and TRUST_PROXY=1. Optional variables: LANDING_URL (an "All demos" link),
+<!-- Space settings: no key needed (visitors enter their own). An optional fallback VLLM_SR_API_KEY goes only in as a
+Space *secret* (Settings -> Variables and secrets -> New secret), never as a variable. The Dockerfile sets PLAY_ALL=0 and TRUST_PROXY=1. Optional variables: LANDING_URL (an "All demos" link),
 D3_MODEL / GUARD_MODEL / LLM_MODEL, MODEL_SLOTS. All variables: README.md, Configuration. -->
 
 Source code, setup and how it was tuned: <https://github.com/madhusoodhans/product-returns-validator>

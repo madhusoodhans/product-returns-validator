@@ -83,7 +83,8 @@ order unless `PLAY_ALL=0`.
 
 ## Requirements
 
-- A vllm-sr API key for <https://app.vllm-sr.ai> (one key works for System One and chat completions). No GPU.
+- A vllm-sr API key for <https://app.vllm-sr.ai> (one key works for System One and chat completions), entered in the
+  page by each visitor. No GPU.
 - Python 3.12 or newer for the demo server and the bench scripts.
 - Node 18+ only to change the UI (`ui/`); the built page is committed in `web/`.
 
@@ -95,13 +96,17 @@ cd product-returns-validator
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 
-export VLLM_SR_API_KEY=...        # your key; never commit it or put it in a file in the repo
 ./start_server.sh                 # http://127.0.0.1:8602 (--bg: background, log in logs/server.log)
 deploy/smoke_test.sh              # health, then three sample conversations through the HTTP API (--all: all 19)
 ```
 
-The server refuses to start without `VLLM_SR_API_KEY`. It listens on 127.0.0.1 only; from a laptop use
-`ssh -L 8602:localhost:8602 user@server`.
+The server needs no key: each visitor enters their own vllm-sr key in the page (a dialog opens on first visit; the
+demos landing page can hand it over as `#key=` in the URL fragment). The key stays in that browser tab's
+`sessionStorage` and in the server's memory for that visitor only; every model call of their chats uses it. Until a
+key works, messages, photos and samples are disabled. Details: [docs/API.md](docs/API.md) "API key".
+`deploy/smoke_test.sh` sends a key the same way, from `VLLM_SR_API_KEY` or `~/.vllm-sr-key`.
+
+It listens on 127.0.0.1 only; from a laptop use `ssh -L 8602:localhost:8602 user@server`.
 
 ## Configuration
 
@@ -109,7 +114,8 @@ Environment variables of the demo server (`app/`, also passed through by `start_
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `VLLM_SR_API_KEY` | required | Bearer token for the hosted API. Read from the environment only; never logged. |
+| `VLLM_SR_API_KEY` | unset | Optional fallback key for visitors who did not enter one (off when unset: the page asks every visitor for a key). Read from the environment only; never logged. |
+| `KEY_IDLE_S` / `KEY_CHECKS_PER_MIN` | 14400 / 10 | A visitor's key is forgotten after this idle time; key checks allowed per visitor and per IP a minute. |
 | `VLLM_SR_API_BASE` | `https://app.vllm-sr.ai` | The hosted API: `/v1/systemone`, `/v1/chat/completions`, `/v1/models`. |
 | `D3_MODEL` | `vllm-sr/d3-flash` | Scope, order match, eligibility, photo and reply checks. |
 | `GUARD_MODEL` | `vllm-sr/vela3-flash` | The guardrail's first layer. |
@@ -118,7 +124,7 @@ Environment variables of the demo server (`app/`, also passed through by `start_
 | `HOST` / `PORT` | `127.0.0.1` / `8602` | Where the demo server listens. |
 | `TRUST_PROXY` | 0 | Behind N proxies that append to `X-Forwarded-For` (a Hugging Face Space: 1): the per-visitor limits use the N-th entry from the right. 0: the header is ignored. |
 | `PLAY_ALL` | `1` | `0` hides the Play all button. |
-| `LANDING_URL` | empty | Page of all demos: the top bar shows an "All demos" link to it and passes the theme as `?theme=light` or `?theme=dark`. Empty hides the link. |
+| `LANDING_URL` | empty | Page of all demos: the top bar shows an "All demos" link to it and passes the theme as `?theme=light` or `?theme=dark`. Empty hides the link. Its origin (plus `http://localhost:8630` and `http://127.0.0.1:8630`) may call `POST /api/key/check` from the browser (CORS). |
 | `D3_TIMEOUT_S` / `GUARD_TIMEOUT_S` / `LLM_TIMEOUT_S` | 15 / 5 / 30 | Longest call per model, in seconds (a streamed reply: the whole stream); capped below the API's 35 s. |
 | `HEALTH_INTERVAL` | 60 | Seconds between health probes: one `GET /v1/models`, no model call (at least 10). |
 | `BREAKER_S` | 30 | How long a model that failed 3 calls in a row is skipped. |
@@ -159,10 +165,11 @@ Each page load starts its own chat, identified by a random UUID. Chats live in m
   the smoke test run freely. Over a limit, the turn gets a fixed reply.
 - At most 50 chats run a turn at once. Model calls wait for a slot (`MODEL_SLOTS`, `MODEL_QUEUE`, `MODEL_WAIT_S`). A
   429 or 503 is retried once after its Retry-After when that is at most 5 s; a longer Retry-After is not waited out:
-  the turn answers busy, and calls of that kind are held back until it ends. When there is no capacity the turn
+  the turn answers busy, and calls of that kind with that key are held back until it ends. When there is no capacity the turn
   answers "The service is busy, please try again."
-- The shared key's limits (per key: chat 16 at once and 180 a minute, d3-flash 1,260 a minute, vela3-flash 480 a
-  minute; chat is also shared with all users of the service) are what bound a public deployment; live values at
+- Each visitor's own key has its limits (per key: chat 16 at once and 180 a minute, d3-flash 1,260 a minute,
+  vela3-flash 480 a minute, and a daily quota; chat is also shared with all users of the service); a key refused
+  during a turn (invalid, disabled, out of quota) stops that turn with a clear error instead of a reply; live values at
   `https://app.vllm-sr.ai/api/info`.
 
 `GET /api/metrics` shows chats, turns in the last hour, queued model calls and 429s. Details in
@@ -192,10 +199,10 @@ Space card is [deploy/space/README.md](deploy/space/README.md).
 
 1. Create a Space with the Docker SDK and push `Dockerfile`, `requirements.txt`, `app/`, `data/`, `web/` and the
    Space card as `README.md`.
-2. In the Space settings (Variables and secrets), add **`VLLM_SR_API_KEY` as a secret**, not as a variable: secrets
-   are not shown in the Space's files or to visitors. Optional variables: `LANDING_URL`, `MODEL_SLOTS`, the model
-   names.
-3. The Space starts the server on 7860; without the secret it exits with a clear message in the Space logs.
+2. No secret is needed: visitors enter their own key. Optional variables: `LANDING_URL`, `MODEL_SLOTS`, the model
+   names. If you want visitors to try it without a key, add `VLLM_SR_API_KEY` **as a secret**, never as a variable
+   (secrets are not shown in the Space's files or to visitors); every visitor's calls then count on that key.
+3. The Space starts the server on 7860.
 
 The Space proxy appends the visitor's address to `X-Forwarded-For`, so `TRUST_PROXY=1` takes the last entry. If the
 Space logs show every visitor sharing one limit, the proxy chain is longer: set `TRUST_PROXY=2`.
@@ -205,18 +212,20 @@ Space logs show every visitor sharing one limit, the proxy chain is longer: set 
 ```bash
 .venv/bin/python tests/test_multiuser.py     # no models: eviction, expiry, rate limits, slots, 429 and Retry-After, proxy IPs
 .venv/bin/python tests/test_availability.py  # no models (stub API): pre-flight, breaker, probe, Vela fallback, Router step, guard, standard replies
+.venv/bin/python tests/test_keys.py          # no models (stub API, fake keys): key format, error codes, key endpoints, no_key, key refused mid-turn, CORS, no key in logs
 .venv/bin/python bench/run_scenarios.py      # hosted API: the 19 sample conversations, every turn's verdict and the Router's choice
 .venv/bin/python bench/run_regressions.py    # hosted API: 30 conversations, one per bug found while building
 .venv/bin/python bench/probe_scope.py        # hosted API: injections, off-topic and normal messages through the flow
 ```
 
-The bench scripts read the key from `VLLM_SR_API_KEY`, or from `~/.vllm-sr-key` (bench only; the app reads the
-environment). Results of the last runs are in `results/`. Replies are generated with a little randomness, so a check
+The bench scripts read the key from `VLLM_SR_API_KEY`, or from `~/.vllm-sr-key` (bench only; the app takes each
+visitor's key from the page). Results of the last runs are in `results/`. Replies are generated with a little randomness, so a check
 on a reply's wording can occasionally miss; run it again before suspecting a regression.
 
 Load test without models: start `bench/stub_models.py` (a fake hosted API on :8932 with switches for 429s, slow
 answers, per-model failures and the Router's guard), start a demo server with
-`VLLM_SR_API_KEY=stub VLLM_SR_API_BASE=http://127.0.0.1:8932 PORT=8642`, then run
+`VLLM_SR_API_KEY=stub VLLM_SR_API_BASE=http://127.0.0.1:8932 PORT=8642` (the env key stands in for the visitors'
+keys), then run
 `bench/load_test.py --url http://127.0.0.1:8642` (50 visitors, 2,000 chats, injected 429s, slow models). Never point
 it at a server that uses the hosted API.
 
