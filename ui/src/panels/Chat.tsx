@@ -47,7 +47,7 @@ const endLook = (reason: string) => END_LOOK[reason] ?? { tone: "neutral" as Ale
 
 /** Replaces the composer once the chat has ended: reason icon, title, text and the server's actions. */
 function EndBanner({ ended, disabled, onNewChat, onReview }: { ended: Ended; disabled: boolean; onNewChat: () => void; onReview: () => void }) {
-  const look = endLook(ended.reason);
+  const look = ended.kind === "review" ? { tone: "info" as AlertTone, icon: UserRoundSearch } : endLook(ended.reason);
   const Icon = look.icon;
   return (
     <div className={styles.endWrap}>

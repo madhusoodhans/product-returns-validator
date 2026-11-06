@@ -23,7 +23,7 @@
     {
      "id": "v-sneaker",
      "title": "Sole came off",
-     "subtitle": "Blurry photo, retake, approved",
+     "subtitle": "Blurry photo, retake; the wear check sends it to a person",
      "order": "7102",
      "turns": [
       {
@@ -36,7 +36,7 @@
       },
       {
        "image": "samples/sneaker/sneaker_3_clear.jpg",
-       "expect": "accept"
+       "expect": "human"
       }
      ]
     },

@@ -2,17 +2,17 @@
  * skipped, blocked or failed as `step` events arrive. D3 nodes expand to their questions. Clicking an earlier user
  * message shows that turn's stored steps here instead of the live turn. */
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Check, ChevronDown, History, TriangleAlert, X } from "lucide-react";
+import { Check, ChevronDown, CircleCheck, History, Info, MessageCircleQuestion, TriangleAlert, UserRound, X, type LucideIcon } from "lucide-react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { Badge } from "../components/arc/badge/badge";
 import { Button } from "../components/arc/button/button";
 import { ScrollArea } from "../components/arc/scroll-area/scroll-area";
 import { motionTokens } from "../components/arc/lib/motion-tokens";
 import {
-  NODES, type ChoiceQ, type ClaimDetail, type D3Detail, type DecisionDetail, type GuardrailDetail, type NodeKey, type OrderMatch, type PolicyDetail,
+  NODES, type ChoiceQ, type ClaimDetail, type D3Detail, type DecisionDetail, type GuardrailDetail, type NodeKey, type OrderMatch, type PhotoDetail, type PolicyDetail,
   type ReplyDetail, type RouteDetail, type RouterDetail, type StepEvent,
 } from "../api";
-import { D3_NODES, NODE_HINT, NODE_LABEL, ROUTER_NOTE, fmtMs, modelName, reasoningWords, routedName, titleCase, verdictMeta } from "../format";
+import { D3_NODES, NODE_HINT, NODE_LABEL, ROUTER_NOTE, fmtMs, modelName, photoRule, reasoningWords, routedName, titleCase, verdictMeta, type RuleTone } from "../format";
 import type { Flow as FlowT, Replay } from "../useDemo";
 import { D3Legend, D3Questions } from "./D3Questions";
 import styles from "./Flow.module.css";
@@ -24,6 +24,14 @@ const STATUS_TEXT = { waiting: "Waiting", running: "Running", done: "Done", skip
 
 /** "Fast decision, reasoning off" for one routed call. */
 const routeLine = (r: RouteDetail) => `${titleCase(r.decision || "unknown")} decision, ${reasoningWords(r)}`;
+
+const CALLOUT_ICON: Record<RuleTone, LucideIcon> = { success: CircleCheck, warning: TriangleAlert, info: UserRound, neutral: Info };
+
+/** One line that says which rule decided, in the tone of its outcome. */
+function Callout({ tone, icon, children }: { tone: RuleTone; icon?: LucideIcon; children: ReactNode }) {
+  const Icon = icon ?? CALLOUT_ICON[tone];
+  return <p className={styles.callout} data-tone={tone}><Icon size={14} strokeWidth={2} aria-hidden="true" /><span>{children}</span></p>;
+}
 
 /** What vllm-sr/auto picked for the reply: decision and reasoning, then the model it routed to, as given. The claim
  * extraction call is routed on its own and shown small when it went elsewhere. */
@@ -51,16 +59,18 @@ function OrderMatchView({ m }: { m: OrderMatch }) {
   if (!q) return null;
   const top = q.probs[q.choice] ?? 0;
   const th = m.threshold;
-  const matched = q.choice !== "unclear" && (th == null || top >= th);
+  const none = q.choice === "none" || !!m.no_match;
+  const matched = q.choice !== "unclear" && !none && (th == null || top >= th);
   return (
     <div className={styles.match}>
       <div className={styles.matchHead}>
         <span className={styles.matchName}>Order match<span className={styles.d3}>D3</span></span>
         <span className={styles.matchResult} data-ok={matched}>
-          {matched ? `Matched at ${top.toFixed(2)}` : `Best ${top.toFixed(2)}, not matched`}{th != null ? `, needs ${th}` : ""}
+          {none ? `None of these orders at ${top.toFixed(2)}` : matched ? `Matched at ${top.toFixed(2)}` : `Best ${top.toFixed(2)}, not matched`}{th != null && !none ? `, needs ${th}` : ""}
         </span>
       </div>
       <D3Questions detail={m} threshold={th} />
+      {none && <Callout tone="info" icon={MessageCircleQuestion}>The description fits none of the customer's orders, so the bot asks which order. It never guesses.</Callout>}
     </div>
   );
 }
@@ -68,7 +78,9 @@ function OrderMatchView({ m }: { m: OrderMatch }) {
 function ClaimView({ d }: { d: ClaimDetail }) {
   const rows = ([["Order", d.order], ["Product", d.product], ["Issue", d.issue], ["Part", d.part]] as const).filter(([, v]) => v);
   const match = d.order_match?.questions?.length ? d.order_match : null;
-  if (!rows.length && !match) return null;
+  const fit = d.order_fit && !d.order_fit.fits ? d.order_fit : null;
+  const said = fit?.said ? Object.values(fit.said).flat().join(", ") : "";
+  if (!rows.length && !match && !fit) return null;
   return (
     <>
       {rows.length > 0 && (
@@ -77,6 +89,11 @@ function ClaimView({ d }: { d: ClaimDetail }) {
         </dl>
       )}
       {match && <OrderMatchView m={match} />}
+      {fit && (
+        <Callout tone="info" icon={MessageCircleQuestion}>
+          {`The details given${said ? ` (${said})` : ""} do not fit order ${fit.order}, so the bot asks which order. Checked in code, no model call.`}
+        </Callout>
+      )}
     </>
   );
 }
@@ -102,6 +119,15 @@ function DecisionView({ d }: { d: DecisionDetail }) {
       {v && Icon && <Badge tone={v.tone} icon={<Icon size={13} strokeWidth={2} aria-hidden="true" />}>{v.label}</Badge>}
       {!!d.reasons?.length && <ul className={styles.reasons}>{d.reasons.map((r) => <li key={r}>{r}</li>)}</ul>}
       {d.rule && <code className={styles.rule}>{d.rule}</code>}
+      {d.case === "review" && (
+        <Callout tone="info">A hand-off, not a block: the message is about an order, so a person reviews the chat. The customer gets a fixed reply with no language model call, and nothing is approved.</Callout>
+      )}
+      {d.case === "vague" && (
+        <Callout tone="info" icon={MessageCircleQuestion}>A vague request: no item, order or reason given, so the bot asks a follow-up question instead of answering from the Returns page.</Callout>
+      )}
+      {d.case === "no_match" && (
+        <Callout tone="info" icon={MessageCircleQuestion}>Which order? The description fits none of the customer's orders, so the bot asks.</Callout>
+      )}
     </div>
   );
 }
@@ -149,6 +175,9 @@ function GuardView({ d }: { d: GuardrailDetail }) {
         </> : "Vela unavailable, D3 checked alone"}
       </p>
       {scope && <ScopeView m={scope} />}
+      {d.review && (
+        <Callout tone="info">Vela flagged harm, often just swearing, but D3 reads the message as about an order. Not blocked: handed to a person for review.</Callout>
+      )}
     </>
   );
 }
@@ -190,7 +219,15 @@ function Detail({ node, step, open }: { node: NodeKey; step: StepEvent; open: bo
     case "policy": return (d as PolicyDetail).rules ? <PolicyView d={d as PolicyDetail} /> : null;
     case "decision": return <DecisionView d={d as DecisionDetail} />;
     case "reply": return <ReplyView step={step} d={d as ReplyDetail} />;
-    case "eligibility": case "image_check":
+    case "image_check": {
+      const p = d as PhotoDetail;
+      const r = photoRule(p.rule, p.damage_band);
+      return <>
+        {r && <Callout tone={r.tone}>{r.text}</Callout>}
+        {open && p.questions ? <><D3Questions detail={p} /><D3Legend /></> : null}
+      </>;
+    }
+    case "eligibility":
       return open && (d as D3Detail).questions ? <><D3Questions detail={d as D3Detail} /><D3Legend /></> : null;
   }
 }
@@ -214,7 +251,8 @@ function Node({ node, step, last }: { node: NodeKey; step: StepEvent | undefined
   const route = node === "router" ? (step?.detail as RouterDetail | undefined) : undefined;
   const routerPick = node === "router" && status === "done" && !!(route?.decision || route?.model);
   const summary = verdictShown || replaced || routerPick ? "" : step?.summary || (status === "skipped" ? "Not needed" : status === "waiting" || !step ? NODE_HINT[node] : "");
-  const hasDetail = !!step?.detail && (step.status === "done" || step.status === "blocked" || step.status === "failed") && (!isD3 || (hasQuestions && open));
+  const hasDetail = !!step?.detail && (step.status === "done" || step.status === "blocked" || step.status === "failed") && (!isD3 || (hasQuestions && open)
+    || (node === "image_check" && status !== "skipped" && !!(step?.detail as PhotoDetail | undefined)?.rule));
   const detail: ReactNode = hasDetail ? <Detail node={node} step={step!} open={open} /> : null;
   const model = step?.model && status !== "skipped" ? modelName(step.model) : "";
   const ref = useRef<HTMLLIElement>(null);

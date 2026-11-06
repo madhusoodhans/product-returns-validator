@@ -321,3 +321,20 @@ sends the stored key again once and retries the turn.
 
 `VLLM_SR_API_KEY` is optional and off by default: when set, visitors without a key of their own use it. Anything shaped
 like a key in the server's output is printed as `sk-***` (a redaction guard on stdout and stderr).
+
+## Fixes v3 display fields (2026-11-06)
+The flow from the eval branch `fixes-2` (wear check, mug / wine-glass identity check, vague requests, "none of these
+orders", upset customers handed to a person). Extra fields for the UI, display only:
+- `image_check` detail: `rule`, the photo rule that decided: `not_photo | other_product | quality | not_product |
+  lookalike | accept | worn | unsure_item | damage_band | hidden | damage_unclear | no_damage`; `worn_threshold` (0.5)
+  and `damage_band` (0.6). New questions: `condition` (choice `new_damaged | worn | repaired | intact`, with `labels`,
+  `threshold` and `worn_or_repaired` = P(worn) + P(repaired); a person looks from the threshold) and, for a mug or a
+  wine glass, `strict_kind` (yes/no, "Really a mug, not a look-alike": below 0.15 the wrong item, 0.15-0.3 a person).
+  `blurry` is now "Blurry or too dark" (threshold 0.35); `note` is one merged text-in-photo question.
+- `guardrail` detail: `review: true` when Vela flagged harm (no attack) on a message D3 reads as about an order: the
+  turn is handed to a person with a fixed reply (`reply` skipped), verdict `human`. It is not a block.
+- `claim` detail: `order_match.no_match` (D3 picked "None of these orders"); `order_fit` `{"order", "fits": false,
+  "said"}` when a product word named an order but the colour, storage, size or volume given does not fit it (code).
+- `decision` detail: `case` `review | vague | no_match` with a matching `rule` text.
+- `message.ended.kind`: `"review"` on an upset-customer hand-over (`reason` stays `handed_over`, own title and text).
+- Stats: `to_person` (turns with verdict `human`) and `reviews` (of those, upset-customer hand-overs).

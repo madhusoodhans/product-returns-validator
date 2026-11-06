@@ -23,10 +23,10 @@ function Choice({ q }: { q: ChoiceQ }) {
   return (
     <li className={styles.choice}>
       <span className={styles.label}>{q.label}</span>
-      <ul className={styles.opts} style={{ ["--cols" as string]: opts.length === 4 ? 2 : Math.min(opts.length, 3) }} aria-label={`${q.label}: ${optionName(q.choice)}`}>
+      <ul className={styles.opts} style={{ ["--cols" as string]: opts.length === 4 ? 2 : Math.min(opts.length, 3) }} aria-label={`${q.label}: ${optionName(q.choice, q.labels)}`}>
         {opts.map(([k, p]) => (
           <li key={k} className={styles.opt} data-chosen={k === q.choice || undefined}>
-            <span className={styles.optText}><span>{optionName(k)}</span><span className={styles.num}>{p.toFixed(2)}</span></span>
+            <span className={styles.optText}><span>{optionName(k, q.labels)}</span><span className={styles.num}>{p.toFixed(2)}</span></span>
             <span className={styles.optBar}><Fill value={p} tone={k === q.choice ? "accent" : "muted"} /></span>
           </li>
         ))}
@@ -99,6 +99,16 @@ function YesNo({ q, esc }: { q: YesNoQ; esc: Escalation[] }) {
   );
 }
 
+/** The photo condition (new and damaged, worn, repaired, intact) as a choice, then worn + repaired against the threshold
+ * from which a person looks instead of an approval. */
+function Condition({ q }: { q: ChoiceQ }) {
+  const worn = q.worn_or_repaired ?? (q.probs.worn ?? 0) + (q.probs.repaired ?? 0);
+  const th = q.threshold ?? 0.5;
+  const row: YesNoQ = { key: "worn_or_repaired", label: "Worn or repaired", type: "yesno", prob: worn, threshold: th,
+    status: worn >= th ? "bad" : "ok" };
+  return <><Choice q={q} /><YesNo q={row} esc={[]} /></>;
+}
+
 /** `compact`: labelled options on one line each (name, bar, value), lined up with the yes/no rows (guardrail scope check).
  * `top`: show only the N most likely options of a labelled choice (the guardrail's intent). */
 export function D3Questions({ detail, threshold, compact, top }: { detail: D3Detail; threshold?: number; compact?: boolean; top?: number }) {
@@ -106,7 +116,7 @@ export function D3Questions({ detail, threshold, compact, top }: { detail: D3Det
   return (
     <ul className={styles.root}>
       {detail.questions.map((q) => (q.type === "choice"
-        ? q.labels ? <LabelledChoice key={q.key} q={q} threshold={threshold} compact={compact} top={top} /> : <Choice key={q.key} q={q} />
+        ? q.key === "condition" ? <Condition key={q.key} q={q} /> : q.labels ? <LabelledChoice key={q.key} q={q} threshold={threshold} compact={compact} top={top} /> : <Choice key={q.key} q={q} />
         : <YesNo key={q.key} q={q} esc={esc.filter((e) => e.key === q.key)} />))}
     </ul>
   );

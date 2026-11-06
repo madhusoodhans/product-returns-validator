@@ -34,18 +34,25 @@ RULES = {
     "blocked": "instructions to the assistant, a jailbreak or commands, without a real complaint -> blocked",
     "off_topic": "not about orders or returns -> fixed reply",
     "bad_file": "the upload is not a readable image -> ask for a photo",
-    "need_order": "no order of this customer yet -> ask for it",
+    "need_order": "no order of this customer yet, or the description fits none of them -> ask which order",
     "need_problem": "no problem described -> ask",
     "clarify": "visible damage without timing, or unclear problem -> ask",
     "need_photo": "eligible -> ask for a photo",
-    "retake": "photo unusable or damage hidden -> retake",
-    "mismatch": "photo is not of the ordered product -> ask for the ordered item",
+    "retake": "photo blurry or too dark, or damage hidden or only just visible -> retake",
+    "mismatch": "photo is not of the ordered product (another product or a look-alike) -> ask for the ordered item",
     "no_damage": "damage not visible in a usable photo -> ask for a closer photo",
     "accept": "eligible and damage clearly visible -> approve",
     "not_eligible": "policy or eligibility check failed -> not covered",
-    "human": "not visual, over the review limit, too many photos or the customer asked -> a person",
+    "human": "not visual, worn or repaired, unsure of the item, over the review limit, too many photos or the customer "
+             "asked -> a person",
     "info": "a question, not a claim step -> answer from the FAQ and policy, claim unchanged",
     "closed": "claim already decided -> answer only",
+}
+# a more specific rule for the decision step of a few cases (display only)
+RULE_FOR = {
+    "review": "an upset message about an order, flagged by Vela -> a person reviews it (a hand-off, not a block)",
+    "vague": "a return request with no item, order or reason -> ask which order and what is wrong",
+    "no_match": "the description fits none of the customer's orders -> ask which order",
 }
 FAQ = claim.FAQ
 
@@ -187,7 +194,11 @@ class Session:
             sure_normal = sc["scope"] == "returns" and sc["command"] < 0.2 and (
                 sc["probs"].get("returns", 0) >= 0.9 or names_own)
             vela_false_alarm = vela_block and sure_normal
-            injection = (vela_block and not sure_normal) or sc["scope"] == "instructions" or command
+            # fixes-1 (T6): Vela reads profanity as harm, so angry customers were blocked. A harm flag alone (no attack
+            # flag) on a message D3 reads as about orders or returns (not instructions, no commands) is passed to a
+            # person for review instead of being blocked; it is never approved (the chat ends handed over).
+            review = (vela_block and not vela_attack and not sure_normal and sc["scope"] == "returns" and not command)
+            injection = (vela_block and not sure_normal and not review) or sc["scope"] == "instructions" or command
             if intent == "human" and not command:
                 injection = False      # "I want a person, not a bot" reads as instructions; it is a fair request
             sdetail["ms"] = sms
@@ -205,19 +216,26 @@ class Session:
             gstatus, summary = "done", f"Passed ({jb}; D3: on topic)"
             if vela_false_alarm:
                 summary = f"Passed: Vela flagged it ({jb}), D3 sure it is a normal returns message"
+            if review and not injection and sc["complaint"] < 0.5 and intent != "human":
+                ctx["review"] = True
+                ctx["fixed"] = "review"   # fixes-2: a fixed hand-over reply, no LLM call and no reply check (as blocked)
+                gdetail["review"] = True
+                summary = f"Flagged by Vela ({jb}), about an order: passed to a person for review, not blocked"
             if injection and sc["complaint"] >= 0.5:
                 summary = f"Ignored {what}; real complaint handled"
             elif injection:
                 gstatus, summary, verdict = "blocked", f"Blocked: {what}", "blocked"
                 ctx["fixed"] = "blocked_command" if coded else "blocked"
-            elif sc["scope"] == "off_topic" and intent not in ("human", "refund_info", "policy_info"):
+            elif sc["scope"] == "off_topic" and sc.get("intent_raw", intent) not in ("human", "refund_info", "policy_info"):
+                # fixes-2: D3's own pick, not the fallback after "unspecified" (an off-topic account question whose
+                # second-best intent is a policy question is still off-topic)
                 gstatus, summary, verdict = "blocked", "Off-topic: fixed reply, no model call", "off_topic"
                 ctx["fixed"] = "off_topic"
             gdetail["flagged"] = gstatus == "blocked"
             yield step("guardrail", gstatus, summary + ("" if vg else "; Vela unavailable, D3 checked alone"),
                        gdetail["model"], max(vms, sms) if vg else sms, gdetail)
 
-        fixed = verdict in ("blocked", "off_topic", "bad_file")
+        fixed = verdict in ("blocked", "off_topic", "bad_file") or ctx.get("fixed") == "review"
         if fixed:
             yield step("router", "skipped", "Not called: fixed reply, no language model")
         elif not availability.available("llm"):
@@ -228,6 +246,12 @@ class Session:
             yield from skip_rest("router", "Off-topic" if verdict == "off_topic" else "Blocked by the guardrail")
         elif verdict == "bad_file":
             yield from skip_rest("router", "The upload was not a readable image")
+        elif ctx.get("review"):
+            verdict = yield from self._to_person(step, skip_rest, ctx, review=True)
+        elif text and intent != "human" and self._vague(text, image, sc):
+            # fixes-1 (T5): "I want to return something" names no item and no reason: ask (claim flow -> which order,
+            # what is wrong) instead of the Returns-page answer. fixes-2: D3's intent option "unspecified" decides it
+            verdict = yield from self._ask_vague(step, skip_rest, ctx)
         elif intent in ("refund_info", "policy_info", "change_of_mind", "why", "chitchat") and not image \
                 and (intent == "change_of_mind" or not (text and re.search(r"\b\d{4,6}\b", text))) \
                 and not (intent != "policy_info" and self._other_claim_named(text)):
@@ -266,9 +290,12 @@ class Session:
             end = {"accept": "approved", "not_eligible": "not_covered", "human": "handed_over"}[verdict]
             if verdict == "human" and c and c.final and c.final[0] == "accept":
                 end = "approved_and_handed_over"
+        case = ("review" if ctx.get("review") and verdict == "human" else
+                "vague" if ctx.get("vague") and verdict == "need_order" else
+                "no_match" if ctx.get("no_match") and verdict == "need_order" else None)
         yield step("decision", "done", verdict.replace("_", " ").capitalize(), None, 0,
                    {"verdict": verdict, "reasons": ctx["reasons"] or ([ctx["reason"]] if ctx.get("reason") else []),
-                    "rule": RULES.get(verdict, "")})
+                    "rule": RULE_FOR.get(case) or RULES.get(verdict, ""), **({"case": case} if case else {})})
 
         # 8. reply
         ctx.update(product=c and c.order["product"], order=c and c.order["order"], item=c and c.order["item"])
@@ -351,13 +378,14 @@ class Session:
             yield {"type": "token", "text": piece + " "}
         self.history.append({"role": "assistant", "content": out["text"]})
         if end:
-            self.ended = ending(end, c)
+            self.ended = ending(end, c, review=bool(ctx.get("review")))
         yield {"type": "message", "role": "assistant", "text": out["text"], "verdict": verdict,
                "order": c and {k: c.order[k] for k in ("order", "product", "item", "price", "delivered_days_ago")},
                "policy_ref": policy_ref(verdict, ctx, c), "ended": self.ended}
         yield {"type": "done", "turn": tid, "calls": calls, "route": ctx.get("route"),
                "steps": [steps[n] for n in NODES if n in steps],
-               "avoided": bool(c and c.final and verdict in ("not_eligible", "human") and not c.photo_checked)}
+               "avoided": bool(c and c.final and verdict in ("not_eligible", "human") and not c.photo_checked),
+               "review": bool(ctx.get("review")) and verdict == "human"}
 
     def _standard_reply(self, verdict, ctx, why, step, summary="Standard reply: language model unavailable"):
         """The reply step of a standard (template) reply; the text is reply.standard(verdict, ctx)."""
@@ -460,12 +488,30 @@ class Session:
         ctx["what"] = "info"
         return "info"
 
-    def _to_person(self, step, skip_rest, ctx):
-        """The customer asked for a person: hand over straight away."""
+    def _ask_vague(self, step, skip_rest, ctx):
+        """fixes-2: the vague request is asked about straight away. fixes-1 sent it through the claim flow, which spent
+        a claim extraction (LLM) and a D3 order match on a message that names no item; same reply, two calls fewer."""
+        yield step("claim", "skipped", "No item, order or reason given: ask which order and what is wrong")
+        yield from skip_rest("claim", "Waiting for the order")
+        ctx["vague"] = True
+        ctx["extra_note"] = (ctx.get("extra_note", "") + " Also ask what is wrong with the item, or why they "
+                             "want to return it.").strip()
+        std_note(ctx, "What is wrong with the item, or why would you like to return it?")
+        return "need_order"
+
+    def _vague(self, text, image, sc):
+        """A return request without an item, an order or a reason (fixes-1, T5)."""
+        return bool(text) and not image and not self.claim and sc.get("unspecified", False) \
+            and not re.search(r"\b\d{4,6}\b", text) and not claim.products_in(text)
+
+    def _to_person(self, step, skip_rest, ctx, review=False):
+        """The customer asked for a person (or, review=True, the guardrail passed the message to one): hand over."""
         c = self.claim
-        yield step("claim", "skipped", "Customer asked for a person")
+        yield step("claim", "skipped", "Passed to a person for review" if review else "Customer asked for a person")
         yield from skip_rest("claim", "Not needed: handed to a person")
-        ctx["reason"] = "the customer asked for a person"
+        ctx["reason"] = "a colleague will review the conversation" if review else "the customer asked for a person"
+        if review:
+            self.queued = []   # the chat ends with the hand-over: nothing else is decided in it
         if c and c.final and c.final[0] == "accept":
             ctx["what"] = "human_after_accept"
         elif c and c.final and c.final[0] == "not_eligible":
@@ -538,6 +584,14 @@ class Session:
                 detail["extraction"] = xnote
             how = ""
             other = None if own else self._other_claim_named(text)
+            if other and other not in self.claims and claim.contradicts(text, other):
+                # fixes-1 (T4): a product word opens a new claim only when the description fits that order ("my blue
+                # phone, 256GB" is not the black 128 GB phone). fixes-2: the colour / size / storage / volume the
+                # customer gives is compared with the order in plain code (fixes-1 spent a D3 order match on it)
+                detail["order_fit"] = {"order": other, "fits": False, "said": {k: sorted(v) for k, v in claim.attrs(text).items()}}
+                other = None
+                if not c:
+                    ctx["no_match"] = True
             if own:
                 if not c or c.order["order"] != own[0]:
                     new = own[0] not in self.claims
@@ -566,7 +620,7 @@ class Session:
                     c.complaint.append((None, seed))
                     new_problem = True
             # no own order number: D3 matches the text against the customer's orders
-            if not own and not how and (not c or c.final or (d.get("problem") and not foreign)):
+            if not own and not how and not ctx.get("no_match") and (not c or c.final or (d.get("problem") and not foreign)):
                 self.unmatched.append(text)
                 chosen, cands, mdetail, mms, mtok = claim.match_order(" ".join(self.unmatched[-3:]) if not c else text)
                 calls.append(("d3", mms, mtok))
@@ -574,7 +628,11 @@ class Session:
                 detail["order_match"] = mdetail
                 ms += mms
                 p = dict(cands).get(chosen, 0) if chosen else 0
-                if chosen and foreign and not c:
+                if mdetail.get("no_match") and not c:
+                    # fixes-1 (T4): fits none of the customer's orders: ask, never guess. fixes-2: a typed order number
+                    # that is not hers keeps its own "order N is not on your account" line
+                    ctx["no_match"] = not foreign
+                elif chosen and foreign and not c:
                     # they typed a number that is not theirs: offer a match from their description, never assume it
                     if d.get("problem"):
                         ctx["options"] = f"{claim.ORDERS[chosen]['item']} (order {chosen})"
@@ -593,7 +651,8 @@ class Session:
             detail.update(order=c and c.order["order"], product=c and c.order["product"])
             summary = (f"Order {c.order['order']}: {c.order['item']}{how}" if c else
                        f"Order {ctx['not_found']} is not on this account" if ctx.get("not_found") else
-                       "Which order? " + ctx["options"] if ctx.get("options") else "No order yet")
+                       "Which order? " + ctx["options"] if ctx.get("options") else
+                       "No order of this customer fits the description" if ctx.get("no_match") else "No order yet")
             if xnote:
                 summary += f" ({xnote})"
             if ctx.get("extract_route"):
@@ -610,6 +669,10 @@ class Session:
             yield step("claim", "skipped", f"From an earlier turn: order {c.order['order']}" if c else "No text")
 
         if not c:
+            if ctx.get("no_match"):
+                ctx["extra_note"] = (ctx.get("extra_note", "") + " Say you could not find an order matching that "
+                                     "description on their account, so you need to know which order it is.").strip()
+                std_note(ctx, "I couldn't find an order matching that description on your account.")
             if img:
                 self.pending_image, self.pending_at = img, time.time()
                 ctx["photo_note"] = "Say their photo is kept and will be checked once we know the order; do not describe it."
@@ -796,6 +859,8 @@ END = {
                                  "within one working day."),
     "handed_over": ("Passed to a colleague", "A colleague will review your case and reply by email within one working "
                     "day."),
+    "handed_over_review": ("Passed to a colleague for review", "This chat was handed to a colleague, not blocked. "
+                           "No decision has been made yet; they will reply by email within one working day."),
     "not_covered": ("Not covered", "This return is not covered by the policy for this item. If you think this is wrong, "
                     "a colleague can review the decision."),
     "blocked": ("Closed after repeated bypass attempts", "This chat was closed after repeated attempts to bypass our "
@@ -805,8 +870,11 @@ END = {
 }
 
 
-def ending(reason, c):
+def ending(reason, c, review=False):
     title, text = END[reason]
-    return {"reason": reason, "title": title, "text": text,
+    if review and reason == "handed_over":
+        # the guardrail passed an upset message about an order to a person: a hand-off, not a block
+        title, text = END["handed_over_review"]
+    return {"reason": reason, "title": title, "text": text, **({"kind": "review"} if review else {}),
             "order": c and c.order["order"] if reason not in ("blocked", "off_topic") else None,
             "actions": ["review", "new_chat"] if reason == "not_covered" else ["new_chat"]}

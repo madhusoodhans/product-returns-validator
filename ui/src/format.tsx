@@ -4,7 +4,7 @@ import {
   Ban, Camera, CloudOff, CircleAlert, CircleCheck, CircleDot, CircleHelp, CircleSlash, EyeOff, FileX, Hash, Hourglass, Info, Lock, MessageCircleQuestion, MessageSquareOff, RefreshCw, Shuffle, ShieldAlert, UserRound,
 } from "lucide-react";
 import type { BadgeTone } from "./components/arc/badge/badge";
-import type { NodeKey, Verdict } from "./api";
+import type { NodeKey, PhotoRule, Verdict } from "./api";
 
 export interface VerdictMeta { label: string; short: string; tone: BadgeTone; icon: LucideIcon }
 export const VERDICT: Record<Verdict, VerdictMeta> = {
@@ -13,11 +13,11 @@ export const VERDICT: Record<Verdict, VerdictMeta> = {
   mismatch: { label: "Wrong product", short: "Mismatch", tone: "warning", icon: Shuffle },
   no_damage: { label: "No damage visible", short: "No damage", tone: "neutral", icon: EyeOff },
   not_eligible: { label: "Not eligible", short: "Not eligible", tone: "danger", icon: Ban },
-  human: { label: "Human review", short: "Human", tone: "info", icon: UserRound },
+  human: { label: "To a person", short: "Person", tone: "info", icon: UserRound },
   clarify: { label: "Clarifying question", short: "Clarify", tone: "info", icon: CircleHelp },
   blocked: { label: "Blocked by guardrail", short: "Blocked", tone: "danger", icon: ShieldAlert },
   need_photo: { label: "Photo requested", short: "Need photo", tone: "neutral", icon: Camera },
-  need_order: { label: "Order number requested", short: "Need order", tone: "neutral", icon: Hash },
+  need_order: { label: "Asked which order", short: "Which order", tone: "neutral", icon: Hash },
   need_problem: { label: "Problem requested", short: "Need problem", tone: "neutral", icon: MessageCircleQuestion },
   closed: { label: "Already decided", short: "Closed", tone: "neutral", icon: Lock },
   off_topic: { label: "Off-topic", short: "Off-topic", tone: "info", icon: CircleSlash },
@@ -50,6 +50,27 @@ export const NODE_HINT: Record<NodeKey, string> = {
   reply: "The LLM words the verdict; it cannot change it",
 };
 export const D3_NODES: NodeKey[] = ["eligibility", "image_check"];
+
+/** The rule that decided a photo, in words, with the tone of its outcome. `band` is the damage score below which glare,
+ * a hand or a crop still means a retake. */
+export type RuleTone = "success" | "warning" | "info" | "neutral";
+export function photoRule(rule: PhotoRule | null | undefined, band = 0.6): { text: string; tone: RuleTone } | null {
+  switch (rule) {
+    case "not_photo": return { text: "Not a camera photo (a screenshot, chart or document): wrong item", tone: "warning" };
+    case "other_product": return { text: "Shows another product from the catalogue: wrong item. This is checked before blur and darkness, so it is not sent back for a retake", tone: "warning" };
+    case "quality": return { text: "Blurry or too dark: ask for a retake", tone: "warning" };
+    case "not_product": return { text: "Not the ordered product: wrong item", tone: "warning" };
+    case "lookalike": return { text: "Identity check: a look-alike such as a tumbler, bottle or vase, not the ordered item: wrong item", tone: "warning" };
+    case "accept": return { text: "Condition new and damaged, damage clearly visible: approved", tone: "success" };
+    case "worn": return { text: "Wear check: the item looks worn or repaired from use. Wear is not damage on arrival, so a person looks; it is never approved here", tone: "info" };
+    case "unsure_item": return { text: "Identity check unsure this is the ordered item: a person looks", tone: "info" };
+    case "damage_band": return { text: `Damage only just visible (below ${band.toFixed(1)}) while glare, a hand or the frame edge hides part of it: ask for a retake`, tone: "warning" };
+    case "hidden": return { text: "Glare, a hand or the frame edge hides the damage: ask for a retake", tone: "warning" };
+    case "damage_unclear": return { text: "Damage unclear in the photo: a person looks", tone: "info" };
+    case "no_damage": return { text: "No damage visible in a usable photo", tone: "neutral" };
+    default: return null;
+  }
+}
 
 /** The router's honest description, for its tooltip and detail. */
 export const ROUTER_NOTE = "The Router raises the reasoning effort for upset, urgent or complex turns; normal turns run with reasoning off. "

@@ -26,7 +26,8 @@ export interface OrderInfo { order: string; product: string; item?: string; pric
 export type PolicyRef = "covered" | "not_covered" | "window" | "review_limit" | "photo";
 /** message.ended: null while the chat is open (docs/API.md "Chat ending"). */
 export type EndReason = "approved" | "approved_and_handed_over" | "handed_over" | "not_covered" | "blocked" | "off_topic";
-export interface Ended { reason: EndReason | string; title: string; text: string; order?: string | null; actions: ("review" | "new_chat" | string)[] }
+/** `kind: "review"`: the guardrail passed an upset message about an order to a person (a hand-off, not a block). */
+export interface Ended { reason: EndReason | string; title: string; text: string; order?: string | null; actions: ("review" | "new_chat" | string)[]; kind?: "review" | string }
 export interface GalleryItem { path: string; product: string; case: string }
 /** GET /api/customer: the one mock customer, logged in. Orders most recent first. */
 export interface CustomerOrder {
@@ -42,6 +43,8 @@ export interface ChoiceQ {
   key: string; label: string; type: "choice"; choice: string; probs: Record<string, number>;
   /** Option id -> display name (order matching: order id -> item name). */
   labels?: Record<string, string>;
+  /** Photo condition: P(worn) + P(repaired) and the threshold from which a person looks. */
+  worn_or_repaired?: number; threshold?: number;
 }
 export interface YesNoQ {
   key: string; label: string; type: "yesno"; prob: number; threshold: number; borderline_from?: number;
@@ -50,25 +53,34 @@ export interface YesNoQ {
 export type Question = ChoiceQ | YesNoQ;
 export interface Escalation { key: string; model: string; prob: number; ms?: number }
 export interface D3Detail { model?: string; questions: Question[]; escalated?: Escalation[]; ms?: number }
+/** The rule that decided a photo (docs/API.md "image_check"). */
+export type PhotoRule = "not_photo" | "other_product" | "quality" | "not_product" | "lookalike" | "accept" | "worn" | "unsure_item"
+  | "damage_band" | "hidden" | "damage_unclear" | "no_damage";
+export interface PhotoDetail extends D3Detail { rule?: PhotoRule | null; note_flagged?: boolean; worn_threshold?: number; damage_band?: number }
 
 /** Guardrail: Vela 3 flash scores (prompt attack, harm; null when Vela was unavailable) plus a D3 scope check (choice
  * `scope` and `intent` with `labels`, yes/no `command`, `complaint`). */
 export interface GuardrailDetail {
   attack?: number | null; harm?: number | null; vela_flagged?: boolean; vela_ms?: number | null;
   thresholds?: { attack?: number; harm?: number }; flagged?: boolean; complaint?: number; model?: string; scope_check?: D3Detail | null;
+  /** Vela flagged harm (often swearing) on a message about an order: passed to a person, not blocked. */
+  review?: boolean;
 }
 /** What vllm-sr/auto picked for the reply call (router step `done`); `extraction`: the same for the claim-extraction call. */
 export interface RouteDetail extends RouteBrief { signals?: string | null; ranking?: string | null; routing_ms?: number | null }
 export interface RouterDetail extends RouteDetail { call?: string; extraction?: RouteDetail | null }
 /** D3 order matching on the claim step (no order number in the message): one choice question `order`. `ms` only if the server times it. */
-export interface OrderMatch extends D3Detail { threshold?: number; ms?: number }
+export interface OrderMatch extends D3Detail { threshold?: number; ms?: number; /** D3 picked "none of these orders". */ no_match?: boolean }
 export interface ClaimDetail {
   order?: string | null; product?: string | null; issue?: string | null; part?: string | null; order_match?: OrderMatch | null;
   /** The Router's choice for the claim-extraction call. */
   route?: RouteDetail | null;
+  /** A product word named an order, but the colour, storage, size or volume given does not fit it (checked in code). */
+  order_fit?: { order: string; fits: boolean; said?: Record<string, string[]> } | null;
 }
 export interface PolicyDetail { rules: { label: string; ok: boolean }[] }
-export interface DecisionDetail { verdict: Verdict; reasons?: string[]; rule?: string }
+/** `case`: review (an upset message handed to a person), vague (no item or reason: ask), no_match (fits no order: ask). */
+export interface DecisionDetail { verdict: Verdict; reasons?: string[]; rule?: string; case?: "review" | "vague" | "no_match" | string }
 /** D3 check of the worded reply before it is streamed; a reply that claims an approval not given is replaced. */
 export interface ReplyCheck { model?: string; claims_approval: number; threshold: number; replaced: boolean; ms?: number; original?: string }
 /** `model`: the model the Router picked. `standard`: the language model was unavailable, so a fixed template words the
@@ -87,6 +99,8 @@ export interface Stats {
   /** Replies the language model wrote, by Router decision, and how many of them ran with reasoning on. */
   llm_turns?: number; routes?: Record<string, number>; reasoning_turns?: number;
   blocked?: number; off_topic?: number; image_checks_avoided?: number;
+  /** Turns handed to a person, and of those the upset messages the guardrail passed on (hand-offs, not blocks). */
+  to_person?: number; reviews?: number;
   /** This chat's model time in ms (decision: D3 and Vela); null before its first turn. */
   model_ms?: { decision: number; llm: number; total: number } | null;
   /** Completion tokens the language model wrote in this chat, reasoning tokens included; null before its first turn. */

@@ -76,6 +76,8 @@ class SessionStats:
         self.blocked = 0
         self.off_topic = 0
         self.avoided = 0           # claims closed before any photo check
+        self.to_person = 0         # turns handed to a person (verdict human)
+        self.reviews = 0           # of those, upset messages the guardrail passed to a person (a hand-off, not a block)
 
     def as_dict(self):
         d3 = [ms for k, ms, _ in self.calls if k == "d3"]
@@ -91,6 +93,7 @@ class SessionStats:
                 "llm_turns": len(llm), "routes": decisions,
                 "reasoning_turns": sum(r.get("reasoning") == "on" for r in llm),
                 "blocked": self.blocked, "off_topic": self.off_topic, "image_checks_avoided": self.avoided,
+                "to_person": self.to_person, "reviews": self.reviews,
                 # this chat's model time in ms: decision models (D3 and Vela), the language model, and all model calls
                 "model_ms": {"decision": round(sum(decision), 1), "llm": round(llm_ms, 1),
                              "total": round(sum(ms for _k, ms, _t in self.calls), 1)} if n else None,
@@ -170,6 +173,8 @@ class State:
             st.blocked += verdict == "blocked"
             st.off_topic += verdict == "off_topic"
             st.avoided += bool(done.get("avoided"))
+            st.to_person += verdict == "human"
+            st.reviews += bool(done.get("review"))
             self.turns[done["turn"]] = {"turn": done["turn"], "steps": done["steps"]}
             chat.turns.append(done["turn"])
 

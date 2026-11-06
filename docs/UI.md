@@ -128,3 +128,15 @@ of `ms` of every step that is not skipped. Y adds:
 
 README GIF: `docs/demo-chat.gif` ("Wrong item, then no damage" on the live server, light theme). Play all on the earlier local server: 16/16 matched in
 about 125 s (before the escalation group was added); the banner shows at the end of every sample that ends the chat, and playback goes on to the next sample.
+
+## Fixes v3 outcomes (2026-11-06)
+- Photo check: a callout under the node says which rule decided (`image_check.rule`, `photoRule()` in `src/format.tsx`):
+  wrong item (another product, checked before blur; a look-alike mug or glass), blurry or too dark, damage only just
+  visible with glare, a hand or a crop (retake band), worn or repaired (wear check: to a person), approved. The
+  `condition` question shows its four options and a "Worn or repaired" bar against the threshold.
+- Guardrail `review`, decision `case` `review`: an info callout says it is a hand-off, not a block; the end banner
+  (`ended.kind` `review`) uses the info tone and a person icon. Decision `case` `vague` / `no_match` and claim
+  `order_fit` / `order_match.no_match`: a callout says the bot asks which order.
+- Verdict chips: `human` reads "To a person", `need_order` "Asked which order".
+- Decisions column: "To a person" (`to_person`; its tooltip counts the upset hand-overs, `reviews`).
+

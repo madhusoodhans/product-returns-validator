@@ -46,8 +46,11 @@ export function Stats({ stats }: { stats: StatsT | null }) {
           <Row label="Reasoning on" hint="Replies where the Router switched reasoning on, of the replies the language model wrote in this chat">
             {s.llm_turns == null || !s.turns ? DASH : <>{fmtInt(s.reasoning_turns ?? 0)}<span className={styles.vs}>/</span>{fmtInt(s.llm_turns)}</>}
           </Row>
-          <Row label="Blocked / off-topic" hint="Turns stopped by the guardrail, and off-topic turns, in this chat; both get a fixed reply with no model call">
+          <Row label="Blocked / off-topic" hint="Turns stopped by the guardrail, and off-topic turns, in this chat; both get a fixed reply with no model call. Upset customers handed to a person are not counted here">
             {s.blocked == null && s.off_topic == null ? DASH : <>{fmtInt(s.blocked ?? 0)}<span className={styles.vs}>/</span>{fmtInt(s.off_topic ?? 0)}</>}
+          </Row>
+          <Row label="To a person" hint={`Turns handed to a person in this chat: worn or repaired items, unclear photos, requests for a person, and upset customers (a hand-off, not a block)${s.reviews ? `; ${fmtInt(s.reviews)} upset, with a fixed reply` : ""}`}>
+            {fmtInt(s.to_person)}
           </Row>
           <Row label="Image checks avoided" hint="1 when this chat was settled without a photo check (not eligible or human review)">
             {fmtInt(s.image_checks_avoided)}

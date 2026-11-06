@@ -63,11 +63,19 @@ SCOPE_Q["intent"] = {
                           "does not fit or they do not like it",
         "why": "To know why their photo or claim was not accepted, or what was wrong with it",
         "chitchat": "To greet, thank or make small talk"}}
+# fixes-2 (T5 without a fifth question): fixes-1 asked a separate "says why / what is wrong" question. D3 answers each
+# question on its own image/text pass, so that question cost a whole extra read of the message. One more intent option
+# instead. With the greeting as the previous message (as in the chat): vague requests unspecified 0.35-0.71 (9/10; "can I
+# return an item?" 0.24 reads as a policy question), change-of-mind / policy / refund questions <= 0.03, angry genuine
+# messages <= 0.30. results/fixes-2/tuning/unspecified_greeting.txt, scope_probe.jsonl (bench/fixes2/probe_scope.py).
+UNSPECIFIED = 0.3
+SCOPE_Q["intent"]["criteria"]["unspecified"] = ("To return something or get help with an order without saying which "
+                                                "item it is or what is wrong with it")
 # bench/probe_intent.py: 26/27 (a bare "ok" read as claim), same request, no extra time
 SCOPE_LABELS = {"returns": "About orders or returns", "off_topic": "Off-topic", "instructions": "Instructions to the assistant"}
 INTENT_LABELS = {"claim": "Claim or answer", "refund_info": "Refund or label question", "policy_info": "Policy question",
                  "human": "Wants a person", "change_of_mind": "Not damage (changed mind, size)", "why": "Asks why",
-                 "chitchat": "Greeting or thanks"}
+                 "chitchat": "Greeting or thanks", "unspecified": "Return, no item or reason"}
 
 
 def scope_check(text, prev_assistant=None):
@@ -79,8 +87,15 @@ def scope_check(text, prev_assistant=None):
     a, ms, tokens = d3(st, SCOPE_Q)
     probs = {k: round(float(v), 4) for k, v in a["scope"]["probabilities"].items()}
     iprobs = {k: round(float(v), 4) for k, v in a["intent"]["probabilities"].items()}
+    # "unspecified" is a flag, not an intent of its own: the flow asks only when nothing else names the item (no claim,
+    # no order number, no product word); otherwise the best of the other intents is used, as before fixes-2
+    unspecified = iprobs.get("unspecified", 0) >= UNSPECIFIED
+    intent = raw_intent = a["intent"]["choice"]
+    if intent == "unspecified":
+        intent = max((k for k in iprobs if k != "unspecified"), key=iprobs.get)
     r = {"scope": a["scope"]["choice"], "probs": probs, "complaint": float(a["complaint"]["noul"]),
-         "command": float(a["command"]["noul"]), "intent": a["intent"]["choice"], "intent_probs": iprobs}
+         "command": float(a["command"]["noul"]), "unspecified": unspecified, "intent": intent, "intent_raw": raw_intent,
+         "intent_probs": iprobs}
     detail = {"model": D3_MODEL, "escalated": [], "questions": [
         {"key": "scope", "label": "What the message is", "type": "choice", "choice": r["scope"], "probs": probs,
          "labels": SCOPE_LABELS},
@@ -88,7 +103,7 @@ def scope_check(text, prev_assistant=None):
          "threshold": 0.5, "status": "bad" if r["command"] >= 0.5 else "ok"},
         {"key": "complaint", "label": "Real product problem", "type": "yesno", "prob": round(r["complaint"], 4),
          "threshold": 0.5, "status": "ok"},
-        {"key": "intent", "label": "What the customer wants", "type": "choice", "choice": r["intent"],
+        {"key": "intent", "label": "What the customer wants", "type": "choice", "choice": a["intent"]["choice"],
          "probs": iprobs, "labels": INTENT_LABELS}]}
     return r, detail, ms, tokens
 

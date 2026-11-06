@@ -110,3 +110,16 @@
 .subResult { margin-left: auto; font-variant-numeric: tabular-nums; color: var(--foreground); }
 /* The routed model of a reply the Router ran with reasoning on stands out from reasoning-off replies. */
 .model[data-big] { flex: none; padding: 0 6px; border-radius: 6px; background: color-mix(in oklab, var(--warning) 16%, transparent); color: var(--foreground); font-weight: 500; }
+
+/* Which rule decided (photo rule, hand-off, follow-up question): one line in the tone of the outcome. */
+.callout {
+  display: flex; align-items: flex-start; gap: 6px; margin: 6px 0 0; padding: 6px var(--space-2); border-radius: 10px;
+  font-size: var(--text-xs); line-height: 1.45; color: var(--foreground);
+  background: color-mix(in oklab, var(--callout) 10%, transparent); border: 1px solid color-mix(in oklab, var(--callout) 35%, transparent);
+  --callout: var(--text-secondary);
+}
+.callout svg { flex: none; margin-top: 1px; color: color-mix(in oklab, var(--callout) 80%, var(--foreground)); }
+.callout[data-tone="success"] { --callout: var(--success); }
+.callout[data-tone="warning"] { --callout: var(--warning); }
+.callout[data-tone="info"] { --callout: var(--accent); }
+.callout:first-child { margin-top: 0; }
