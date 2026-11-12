@@ -51,7 +51,7 @@ export function TopBar({ health, theme, onTheme, landingUrl, keyStatus, busy, on
         )}
       </div>
       <div className={styles.title}>
-        <h1 title="Vela guards each message, D3 decides, MoM (vllm-sr/auto) words the reply">Product returns demo · vllm-sr with Vela, D3 and MoM</h1>
+        <h1 title="System One: Vela guards each message and D3 decides; System Two (vllm-sr/auto) words the reply">Product returns demo · System Duo with Vela and D3</h1>
       </div>
 
       <div className={styles.actions}>

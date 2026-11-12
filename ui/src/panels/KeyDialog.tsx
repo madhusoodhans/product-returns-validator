@@ -65,7 +65,7 @@ export function KeyDialog({ open, onOpenChange, onSubmit, error, canClose }: {
             </button>
           </div>
           <p id="vsr-key-status" className={styles.status} role="status" aria-live="polite" data-tone={result?.ok ? "ok" : shownError ? "bad" : undefined}>
-            {result?.ok ? <><CircleCheck size={15} strokeWidth={2} aria-hidden="true" /> Key works for decisions and chat</>
+            {result?.ok ? <><CircleCheck size={15} strokeWidth={2} aria-hidden="true" /> Key works for System One and System Two</>
               : shownError ?? (checking ? "Checking the key with one small decision call and one chat call" : "")}
           </p>
           <div className={styles.row}>
